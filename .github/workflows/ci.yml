@@ -17,6 +17,9 @@ env:
   # Pinned so a Terraform release can never change the normalised output
   # the golden tests and live tests assert against unannounced.
   TERRAFORM_VERSION: 1.16.5
+  # Embedded checks only (--skip-check-update), so the trivy version alone
+  # decides which misconfigurations the security-scan layer reports.
+  TRIVY_VERSION: v0.75.0
 
 jobs:
   test:
@@ -44,6 +47,13 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
+      # Pinned by commit: a moved tag on a security tool's installer is the
+      # supply-chain attack this step would otherwise be open to.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -56,6 +66,7 @@ jobs:
       - name: Run tests
         env:
           STRICTTF_REQUIRE_TERRAFORM: "1"
+          STRICTTF_REQUIRE_TRIVY: "1"
           PROPTEST_CASES: 512
         run: cargo test --all-targets --all-features --locked
 
@@ -148,9 +159,17 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
+      # Pinned by commit: a moved tag on a security tool's installer is the
+      # supply-chain attack this step would otherwise be open to.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+
       - name: Measure coverage
         env:
           STRICTTF_REQUIRE_TERRAFORM: "1"
+          STRICTTF_REQUIRE_TRIVY: "1"
         run: |
           cargo llvm-cov --all-features --locked \
             --lcov --output-path lcov.info
@@ -189,6 +208,13 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+
+      # Pinned by commit: a moved tag on a security tool's installer is the
+      # supply-chain attack this step would otherwise be open to.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
 
       - name: Install stricttf
         shell: bash

@@ -63,7 +63,17 @@ fn a_clean_module_passes_a_full_check_with_no_diagnostics() {
         stricttf::run_check_with_depth(fixture.path(), Depth::Full).expect("check should run");
 
     assert!(report.ok, "{report:#?}");
-    assert!(report.diagnostics.is_empty(), "{report:#?}");
+    // Without trivy the security-scan layer is skipped with exactly one
+    // warning; with it, a `terraform_data`-only module has no findings.
+    if stricttf::trivy::binary().is_some() {
+        assert!(report.diagnostics.is_empty(), "{report:#?}");
+    } else {
+        assert_eq!(
+            support::codes(&report),
+            vec!["trivy::unavailable".to_owned()],
+            "{report:#?}"
+        );
+    }
 }
 
 #[test]

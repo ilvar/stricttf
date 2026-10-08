@@ -123,7 +123,7 @@ fn a_broken_tfvars_or_test_file_is_reported_without_blocking_terraform() {
         )],
         variable_files: vec![file("terraform.tfvars", "name = \n")],
         test_files: vec![file("tests/main.tftest.hcl", "run \"x\" {\n")],
-        has_lock_file: false,
+        lock_file: None,
     };
 
     let (diagnostics, checkable) = stricttf::check_sources(&sources);
@@ -167,7 +167,7 @@ fn reading_a_module_collects_configuration_variables_tests_and_the_lock_file() {
     assert_eq!(paths(&sources.configuration), vec!["a.tf", "b.tf"]);
     assert_eq!(paths(&sources.variable_files), vec!["prod.tfvars"]);
     assert_eq!(paths(&sources.test_files), vec!["tests/main.tftest.hcl"]);
-    assert!(sources.has_lock_file);
+    assert!(sources.lock_file.is_some());
 }
 
 #[cfg(unix)]

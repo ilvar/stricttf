@@ -107,13 +107,24 @@ fn the_manual_lists_no_code_the_checker_cannot_emit() {
     for line in HELP.lines() {
         for word in line.split_whitespace() {
             let candidate = word.trim_matches(|character: char| {
-                !character.is_ascii_alphanumeric() && character != ':' && character != '_'
+                !character.is_ascii_alphanumeric()
+                    && !matches!(character, ':' | '_' | '<' | '>' | '-')
             });
-            if !candidate.starts_with("stricttf::") && !candidate.starts_with("terraform::") {
+            if !is_code(candidate) {
                 continue;
             }
+            // A concrete trivy check ID, such as an example in the manual,
+            // is an instance of the emitted trivy::<ID> family.
+            let family = candidate.strip_prefix("trivy::").is_some_and(|id| {
+                id.split_once('-').is_some_and(|(provider, number)| {
+                    !provider.is_empty()
+                        && provider.chars().all(|c| c.is_ascii_uppercase())
+                        && !number.is_empty()
+                        && number.chars().all(|c| c.is_ascii_digit())
+                })
+            }) && emitted.contains("trivy::<ID>");
             assert!(
-                emitted.contains(candidate),
+                family || emitted.contains(candidate),
                 "the manual documents {candidate}, which nothing emits"
             );
         }
@@ -136,7 +147,16 @@ fn the_manual_forbids_inventing_fixes_and_suppressing_checks() {
     assert!(HELP.contains("Match on code, never on message text"));
 }
 
-/// Every code literal that appears in the crate's source.
+fn is_code(text: &str) -> bool {
+    ["stricttf::", "terraform::", "trivy::"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
+/// Every code literal that appears in the crate's source. Trivy's codes
+/// are a family -- `trivy::` followed by the check ID trivy reports -- so
+/// the `format!("trivy::{id}")` that builds them stands for the documented
+/// `trivy::<ID>`.
 fn emitted_codes() -> BTreeSet<String> {
     let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut codes = BTreeSet::new();
@@ -155,7 +175,9 @@ fn emitted_codes() -> BTreeSet<String> {
 
         let text = std::fs::read_to_string(entry.path()).expect("source should be readable");
         for capture in text.split('"') {
-            if capture.starts_with("stricttf::") || capture.starts_with("terraform::") {
+            if capture == "trivy::{id}" {
+                codes.insert("trivy::<ID>".to_owned());
+            } else if is_code(capture) && !capture.contains('{') {
                 codes.insert(capture.to_owned());
             }
         }

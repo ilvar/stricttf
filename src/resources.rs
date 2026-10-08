@@ -14,7 +14,7 @@ use crate::report::{Diagnostic, LEVEL_ERROR};
 use crate::Module;
 use hcl_edit::expr::{Expression, FuncCall, Object, ObjectKey};
 use hcl_edit::structure::{Attribute, Block, Body};
-use hcl_edit::visit::{visit_attr, visit_func_call, visit_object, Visit};
+use hcl_edit::visit::{visit_attr, visit_block, visit_func_call, visit_object, Visit};
 use hcl_edit::Span;
 use std::ops::Range;
 
@@ -62,6 +62,10 @@ const DATABASE_TYPES: &[&str] = &[
 /// Service wildcards such as `s3:*` are deliberately absent: they are
 /// broad, but scoped, and often the intended grant.
 const WILDCARD_ACTIONS: &[&str] = &["*", "*:*"];
+
+/// Attributes of `aws_lambda_permission` that scope a `"*"` principal to
+/// a source resource, account, or organization.
+const LAMBDA_PERMISSION_SCOPES: &[&str] = &["source_arn", "source_account", "principal_org_id"];
 
 /// Check every resource rule against a parsed module.
 pub fn check(module: &Module) -> Vec<Diagnostic> {
@@ -123,6 +127,13 @@ fn check_block(file: &ParsedFile, block: &Block, diagnostics: &mut Vec<Diagnosti
         }
         ("data", Some("aws_iam_policy_document")) => {
             check_policy_document_statements(file, &block.body, &context, diagnostics);
+            check_policy_document_principals(file, &block.body, &context, diagnostics);
+        }
+        ("resource", Some("aws_lambda_permission")) => {
+            check_lambda_permission(file, &block.body, &context, diagnostics);
+        }
+        ("resource", Some("aws_lambda_function_url")) => {
+            check_lambda_function_url(file, &block.body, &context, diagnostics);
         }
         _other => {}
     }
@@ -509,22 +520,61 @@ fn check_policy_document_statements(
 fn check_policy_documents(file: &ParsedFile, diagnostics: &mut Vec<Diagnostic>) {
     let mut finder = JsonPolicyFinder::default();
     finder.visit_body(&file.body);
-    for span in finder.found {
+    for span in finder.wildcards {
         report_wildcard(file, &span, "a jsonencode policy", diagnostics);
+    }
+    for span in finder.public {
+        report_public_principal(file, &span, "a jsonencode policy", diagnostics);
     }
 }
 
-/// Finds allowing statements with a full wildcard `Action` inside
-/// `jsonencode` arguments. The depth counter, rather than a nested walk
-/// per call, keeps a `jsonencode` nested inside another from being
-/// reported twice.
+/// Finds allowing statements inside `jsonencode` arguments: anywhere for
+/// a full wildcard `Action`, and inside resource policy arguments for an
+/// unconditioned `"*"` principal. The depth counters, rather than a
+/// nested walk per call, keep a `jsonencode` nested inside another from
+/// being reported twice.
 #[derive(Default)]
 struct JsonPolicyFinder {
     depth: usize,
-    found: Vec<Range<usize>>,
+    policy_depth: usize,
+    resource_type: Option<String>,
+    wildcards: Vec<Range<usize>>,
+    public: Vec<Range<usize>>,
+}
+
+impl JsonPolicyFinder {
+    /// Whether an attribute holds a resource policy: any `policy`
+    /// argument, and `aws_glacier_vault`'s `access_policy`.
+    fn is_policy_attribute(&self, key: &str) -> bool {
+        key == "policy"
+            || (key == "access_policy"
+                && self.resource_type.as_deref() == Some("aws_glacier_vault"))
+    }
 }
 
 impl Visit for JsonPolicyFinder {
+    fn visit_block(&mut self, node: &Block) {
+        let is_resource = node.has_ident("resource");
+        if is_resource {
+            self.resource_type = hcl::label(node, 0).map(str::to_owned);
+        }
+        visit_block(self, node);
+        if is_resource {
+            self.resource_type = None;
+        }
+    }
+
+    fn visit_attr(&mut self, node: &Attribute) {
+        let is_policy = self.is_policy_attribute(node.key.as_str());
+        if is_policy {
+            self.policy_depth = self.policy_depth.saturating_add(1);
+        }
+        visit_attr(self, node);
+        if is_policy {
+            self.policy_depth = self.policy_depth.saturating_sub(1);
+        }
+    }
+
     fn visit_func_call(&mut self, node: &FuncCall) {
         let is_jsonencode =
             node.name.namespace.is_empty() && node.name.name.as_str() == "jsonencode";
@@ -544,21 +594,165 @@ impl Visit for JsonPolicyFinder {
                     .find(|(key, _value)| object_key_name(key) == Some(wanted))
                     .map(|(_key, value)| value.expr())
             };
-            if let (true, Some(action)) = (allows(entry("Effect")), entry("Action")) {
-                let actions: Vec<&Expression> = match action.as_array() {
-                    Some(array) => array.iter().collect(),
-                    None => vec![action],
-                };
-                self.found.extend(
-                    actions
+            let allowing = allows(entry("Effect"));
+            if let (true, Some(action)) = (allowing, entry("Action")) {
+                self.wildcards.extend(
+                    one_or_many(action)
                         .into_iter()
                         .filter(|action| is_wildcard_action(action))
                         .filter_map(Span::span),
                 );
             }
+            let unconditioned = entry("Condition").is_none();
+            if let (true, true, true, Some(principal)) = (
+                self.policy_depth > 0,
+                allowing,
+                unconditioned,
+                entry("Principal"),
+            ) {
+                self.public.extend(public_json_principals(principal));
+            }
         }
         visit_object(self, node);
     }
+}
+
+/// The elements of a literal array, or the expression itself.
+fn one_or_many(expression: &Expression) -> Vec<&Expression> {
+    match expression.as_array() {
+        Some(array) => array.iter().collect(),
+        None => vec![expression],
+    }
+}
+
+fn is_everyone(expression: &Expression) -> bool {
+    hcl::literal_string(expression) == Some("*")
+}
+
+/// The spans of `"*"` literals in a JSON `Principal`: the bare string
+/// `"*"`, or `"*"` as (or within) the value of an `AWS` key.
+fn public_json_principals(principal: &Expression) -> Vec<Range<usize>> {
+    if is_everyone(principal) {
+        return principal.span().into_iter().collect();
+    }
+    let Some(object) = principal.as_object() else {
+        return Vec::new();
+    };
+    object
+        .iter()
+        .filter(|(key, _value)| object_key_name(key) == Some("AWS"))
+        .flat_map(|(_key, value)| one_or_many(value.expr()))
+        .filter(|identifier| is_everyone(identifier))
+        .filter_map(Span::span)
+        .collect()
+}
+
+/// `statement` blocks of `data "aws_iam_policy_document"` that allow a
+/// `"*"` principal without any `condition`.
+fn check_policy_document_principals(
+    file: &ParsedFile,
+    body: &Body,
+    context: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in body.blocks().filter(|nested| nested.has_ident("statement")) {
+        let conditioned = statement
+            .body
+            .blocks()
+            .any(|nested| nested.has_ident("condition"));
+        if conditioned || !allows(value(&statement.body, "effect")) {
+            continue;
+        }
+        for principals in statement
+            .body
+            .blocks()
+            .filter(|nested| nested.has_ident("principals"))
+        {
+            let kind = value(&principals.body, "type").and_then(hcl::literal_string);
+            if !matches!(kind, Some("*" | "AWS")) {
+                continue;
+            }
+            let Some(identifiers) =
+                value(&principals.body, "identifiers").and_then(Expression::as_array)
+            else {
+                continue;
+            };
+            let everyone = identifiers
+                .iter()
+                .filter(|identifier| is_everyone(identifier))
+                .filter_map(Span::span);
+            for span in everyone {
+                report_public_principal(file, &span, context, diagnostics);
+            }
+        }
+    }
+}
+
+/// `aws_lambda_permission` granting invocation to `"*"` with no source
+/// resource, account, or organization to scope it.
+fn check_lambda_permission(
+    file: &ParsedFile,
+    body: &Body,
+    context: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(principal) = value(body, "principal").filter(|principal| is_everyone(principal))
+    else {
+        return;
+    };
+    let scoped = LAMBDA_PERMISSION_SCOPES
+        .iter()
+        .any(|scope| hcl::attribute(body, scope).is_some());
+    if scoped {
+        return;
+    }
+    let Some(span) = principal.span() else {
+        return;
+    };
+    report_public_principal(file, &span, context, diagnostics);
+}
+
+fn report_public_principal(
+    file: &ParsedFile,
+    span: &Range<usize>,
+    context: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::rule(
+        LEVEL_ERROR,
+        "stricttf::public_principal",
+        format!(
+            "{context} grants access to every principal (\"*\") with no condition; name the specific principals or add a condition that scopes the grant"
+        ),
+        file.location(span),
+    ));
+}
+
+fn check_lambda_function_url(
+    file: &ParsedFile,
+    body: &Body,
+    context: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(authorization) = value(body, "authorization_type") else {
+        return;
+    };
+    let unauthenticated =
+        hcl::literal_string(authorization).is_some_and(|kind| kind.eq_ignore_ascii_case("NONE"));
+    if !unauthenticated {
+        return;
+    }
+    let Some(span) = authorization.span() else {
+        return;
+    };
+    diagnostics.push(Diagnostic::rule(
+        LEVEL_ERROR,
+        "stricttf::lambda_url_unauthenticated",
+        format!(
+            "{context} sets `authorization_type = \"NONE\"`, so anyone on the internet can invoke the function; set it to \"AWS_IAM\""
+        ),
+        file.location(&span),
+    ));
 }
 
 fn report_wildcard(

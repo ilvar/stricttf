@@ -4,6 +4,7 @@ locals {
   name       = "${local.bucketName}"
 }
 
+// Random suffixes keep bucket names unique.
 resource "random_id" "suffix" {
   byte_length = 4
 }
@@ -40,4 +41,17 @@ data "external" "lookup" {
 resource "google_storage_bucket" "archive" {
   name     = "kitchen-sink-archive"
   location = "EU"
+}
+
+resource "random_id" "per_setting" {
+  count       = length(var.settings)
+  byte_length = 4
+}
+
+data "terraform_remote_state" "network" {
+  backend = "local"
+
+  config = {
+    path = "../network/terraform.tfstate"
+  }
 }

@@ -52,13 +52,18 @@ pub fn check(module: &Module) -> Vec<Diagnostic> {
         required_version(files, &mut diagnostics);
         variable_files(module, &mut diagnostics);
     }
+    required_version_bounds(files, &mut diagnostics);
     provider_requirements(module, &mut diagnostics);
+    lock_file_platforms(module, &mut diagnostics);
     variables(files, &mut diagnostics);
     outputs(files, &mut diagnostics);
     expressions(files, module.complete, &mut diagnostics);
     module_calls(files, &mut diagnostics);
     resource_meta_arguments(files, &mut diagnostics);
     names(files, &mut diagnostics);
+    for file in files.iter().chain(&module.variable_files) {
+        line_comments(file, &mut diagnostics);
+    }
 
     diagnostics
 }
@@ -126,6 +131,26 @@ fn required_version(files: &[ParsedFile], diagnostics: &mut Vec<Diagnostic>) {
         "no terraform block sets required_version; add `required_version = \"~> 1.9\"` (or the range this module supports) to the terraform block",
         at,
     ));
+}
+
+/// A lower bound alone admits every future Terraform release, so the
+/// constraint must also cap the version.
+fn required_version_bounds(files: &[ParsedFile], diagnostics: &mut Vec<Diagnostic>) {
+    for (file, block) in hcl::blocks(files, "terraform") {
+        let Some(attribute) = hcl::attribute(&block.body, "required_version") else {
+            continue;
+        };
+        let Some(constraint) = hcl::literal_string(&attribute.value) else {
+            continue;
+        };
+        if !is_bounded_constraint(constraint) {
+            diagnostics.push(error(
+                "stricttf::required_version_unbounded",
+                format!("required_version \"{constraint}\" has no upper bound; cap it, for example \">= 1.9.0, < 2.0.0\" or \"~> 1.9\""),
+                file.locate(&attribute.value),
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -233,6 +258,40 @@ fn provider_requirements(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
             format!("this module uses providers but has no {LOCK_FILE}; run `terraform init` and commit the lock file so every run selects the same provider builds"),
             Location::whole_line(LOCK_FILE, 1, ""),
         ));
+    }
+}
+
+/// A lock file without `zh:` hashes and with a single `h1:` hash can only
+/// verify the platform that wrote it -- typical of plugin-cache or mirror
+/// installs -- so `init -lockfile=readonly` fails on every other one.
+fn lock_file_platforms(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
+    let Some(lock) = &module.lock_file else {
+        return;
+    };
+    for block in lock.body.get_blocks("provider") {
+        let Some(hashes) = hcl::attribute(&block.body, "hashes") else {
+            continue;
+        };
+        let Expression::Array(items) = &hashes.value else {
+            continue;
+        };
+        let Some(hashes) = items
+            .iter()
+            .map(hcl::literal_string)
+            .collect::<Option<Vec<&str>>>()
+        else {
+            continue;
+        };
+        let zh = hashes.iter().filter(|hash| hash.starts_with("zh:")).count();
+        let h1 = hashes.iter().filter(|hash| hash.starts_with("h1:")).count();
+        if zh == 0 && h1 < 2 {
+            let name = hcl::label(block, 0).unwrap_or_default();
+            diagnostics.push(warning(
+                "stricttf::lock_file_single_platform",
+                format!("the lock entry for {name} has hashes for only the platform that wrote it, so `terraform init -lockfile=readonly` fails elsewhere; run `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`"),
+                lock.locate_header(block),
+            ));
+        }
     }
 }
 
@@ -451,6 +510,19 @@ fn outputs(files: &[ParsedFile], diagnostics: &mut Vec<Diagnostic>) {
                 at,
             ));
         }
+        // Only a missing flag or a literal `false` is decided; a computed
+        // flag may well be true.
+        let unmarked = match hcl::attribute(&block.body, "sensitive") {
+            None => true,
+            Some(flag) => matches!(&flag.value, Expression::Bool(value) if !*value.value()),
+        };
+        if hcl::is_secret_name(name) && unmarked {
+            diagnostics.push(error(
+                "stricttf::sensitive_output_unmarked",
+                format!("output {name} names credential material but is not marked sensitive; add `sensitive = true`"),
+                locate_label(file, block, 0),
+            ));
+        }
     }
 }
 
@@ -647,6 +719,109 @@ impl ExpressionWalk<'_> {
             replacement,
         ))
     }
+
+    /// Legacy `.0` indexes and `.*` attribute-only splats. An earlier
+    /// attribute-only splat captures a later `.0` but not `[0]`, and a
+    /// full splat captures indexes an attribute-only splat does not, so
+    /// a rewrite is offered only where neither difference can arise.
+    fn deprecated_index(&mut self, traversal: &Traversal) {
+        let operators = traversal.operators.as_slice();
+        for (position, operator) in operators.iter().enumerate() {
+            let (Some(span), Some(written)) = (operator.span(), self.file.source_of(operator))
+            else {
+                continue;
+            };
+            let captured = operators
+                .iter()
+                .take(position)
+                .any(|earlier| matches!(earlier.value(), TraversalOperator::AttrSplat(_)));
+            let mut after = operators.iter().skip(position.saturating_add(1));
+            let at = self.file.location(&span);
+            let diagnostic = match operator.value() {
+                TraversalOperator::LegacyIndex(index) => {
+                    let index = index.value();
+                    let replacement = format!("[{index}]");
+                    let diagnostic = error(
+                        "stricttf::deprecated_index",
+                        format!(
+                            "`{written}` is the deprecated dot-index syntax; write `{replacement}`"
+                        ),
+                        at,
+                    );
+                    let exact = written.strip_prefix('.') == Some(index.to_string().as_str());
+                    match (captured, exact) {
+                        (false, true) => {
+                            with_reparsed_fix(diagnostic, self.file, &span, replacement)
+                        }
+                        (true, _) | (false, false) => diagnostic,
+                    }
+                }
+                TraversalOperator::AttrSplat(_) => {
+                    let index_follows = after.any(|later| match later.value() {
+                        TraversalOperator::GetAttr(_) => false,
+                        TraversalOperator::Index(_)
+                        | TraversalOperator::LegacyIndex(_)
+                        | TraversalOperator::AttrSplat(_)
+                        | TraversalOperator::FullSplat(_) => true,
+                    });
+                    if index_follows || captured {
+                        error(
+                            "stricttf::deprecated_index",
+                            "`.*` is the deprecated attribute-only splat, and next to another index or splat `[*]` would change what it selects; rewrite it as `[*]` with the following index outside parentheses, as in `(x[*].attr)[0]`",
+                            at,
+                        )
+                    } else {
+                        let diagnostic = error(
+                            "stricttf::deprecated_index",
+                            "`.*` is the deprecated attribute-only splat; write `[*]`",
+                            at,
+                        );
+                        if written == ".*" {
+                            with_reparsed_fix(diagnostic, self.file, &span, "[*]".to_owned())
+                        } else {
+                            diagnostic
+                        }
+                    }
+                }
+                TraversalOperator::GetAttr(_)
+                | TraversalOperator::Index(_)
+                | TraversalOperator::FullSplat(_) => continue,
+            };
+            self.diagnostics.push(diagnostic);
+        }
+    }
+}
+
+/// Attach a fix replacing `span` with `replacement`, but only when the
+/// rewritten file still parses.
+fn with_reparsed_fix(
+    diagnostic: Diagnostic,
+    file: &ParsedFile,
+    span: &Range<usize>,
+    replacement: String,
+) -> Diagnostic {
+    let text = &file.text;
+    let parses = match (text.get(..span.start), text.get(span.end..)) {
+        (Some(head), Some(tail)) => {
+            hcl_edit::parser::parse_body(&format!("{head}{replacement}{tail}")).is_ok()
+        }
+        _other => false,
+    };
+    if !parses {
+        return diagnostic;
+    }
+    let fix = Fix::replace(
+        format!(
+            "replace `{}` with `{replacement}`",
+            text.get(span.clone()).unwrap_or_default()
+        ),
+        file.path.as_str(),
+        text,
+        span.start,
+        span.end,
+        replacement,
+    );
+    diagnostic.with_fix(fix)
 }
 
 /// Whether an expression binds tighter than any operator, so it can
@@ -709,6 +884,7 @@ impl Visit for ExpressionWalk<'_> {
 
     fn visit_traversal(&mut self, node: &Traversal) {
         self.record_reference(node);
+        self.deprecated_index(node);
         self.position = Position::Operand;
         self.visit_expr(&node.expr);
         for operator in &node.operators {
@@ -943,13 +1119,172 @@ fn resource_meta_arguments(files: &[ParsedFile], diagnostics: &mut Vec<Diagnosti
     }
 
     for (file, block) in hcl::blocks(files, "data") {
-        if hcl::label(block, 0) == Some("external") {
-            diagnostics.push(error(
+        match hcl::label(block, 0) {
+            Some("external") => diagnostics.push(error(
                 "stricttf::external_program",
                 "data \"external\" runs an arbitrary local program during every plan; use a provider data source or pass the value in as a variable",
                 file.locate_header(block),
+            )),
+            Some("terraform_remote_state") => diagnostics.push(warning(
+                "stricttf::remote_state_coupling",
+                "terraform_remote_state couples this module to another stack's state layout; read the values that stack publishes (an SSM parameter or a data source) instead",
+                file.locate_header(block),
+            )),
+            _other => {}
+        }
+    }
+
+    for (file, block) in hcl::blocks(files, "module") {
+        if let Some(depends_on) = hcl::attribute(&block.body, "depends_on") {
+            diagnostics.push(warning(
+                "stricttf::module_depends_on",
+                "depends_on on a module defers every data source in it to apply time, so plans fill with unknown values; depend on specific resources inside the module or pass their outputs in instead",
+                file.locate(depends_on),
             ));
         }
+    }
+
+    for kind in ["resource", "data", "module"] {
+        for (file, block) in hcl::blocks(files, kind) {
+            count_over_collection(file, block, diagnostics);
+        }
+    }
+}
+
+/// `count = length(collection)` addresses each object by position, so
+/// removing one element shifts every later index and recreates those
+/// objects.
+fn count_over_collection(file: &ParsedFile, block: &Block, diagnostics: &mut Vec<Diagnostic>) {
+    let Some(count) = hcl::attribute(&block.body, "count") else {
+        return;
+    };
+    let Expression::FuncCall(call) = &count.value else {
+        return;
+    };
+    if call.name.is_namespaced() || call.name.name.as_str() != "length" {
+        return;
+    }
+    diagnostics.push(error(
+        "stricttf::count_over_collection",
+        "count = length(...) keys each object by position, so removing an element shifts every later index and recreates those objects; use for_each over a map or set instead",
+        file.locate(&count.value),
+    ));
+}
+
+// ---------------------------------------------------------------------
+// comments
+// ---------------------------------------------------------------------
+
+/// Collects the spans of every string, template, and heredoc, inside
+/// which `//` and `#` are text rather than comments.
+struct StringSpans {
+    spans: Vec<Range<usize>>,
+    /// Set when any string lacks a span, so its extent is unknown.
+    unknown: bool,
+}
+
+impl StringSpans {
+    fn record(&mut self, span: Option<Range<usize>>) {
+        match span {
+            Some(span) => self.spans.push(span),
+            None => self.unknown = true,
+        }
+    }
+}
+
+impl Visit for StringSpans {
+    fn visit_expr(&mut self, node: &Expression) {
+        match node {
+            Expression::String(_)
+            | Expression::StringTemplate(_)
+            | Expression::HeredocTemplate(_) => {
+                self.record(node.span());
+            }
+            Expression::Null(_)
+            | Expression::Bool(_)
+            | Expression::Number(_)
+            | Expression::Array(_)
+            | Expression::Object(_)
+            | Expression::Parenthesis(_)
+            | Expression::Variable(_)
+            | Expression::Conditional(_)
+            | Expression::FuncCall(_)
+            | Expression::Traversal(_)
+            | Expression::UnaryOp(_)
+            | Expression::BinaryOp(_)
+            | Expression::ForExpr(_) => visit::visit_expr(self, node),
+        }
+    }
+
+    fn visit_block(&mut self, node: &Block) {
+        for label in &node.labels {
+            self.record(label.span());
+        }
+        visit::visit_block(self, node);
+    }
+}
+
+/// `//` line comments are a legacy alternative Terraform's style guide
+/// replaces with `#`. Strings come from the parser, so only real comment
+/// trivia is scanned; `#` and `/* */` comments are skipped whole.
+fn line_comments(file: &ParsedFile, diagnostics: &mut Vec<Diagnostic>) {
+    let mut strings = StringSpans {
+        spans: Vec::new(),
+        unknown: false,
+    };
+    strings.visit_body(&file.body);
+    if strings.unknown {
+        return;
+    }
+    strings.spans.sort_by_key(|span| span.start);
+
+    let text = file.text.as_str();
+    let bytes = text.as_bytes();
+    let line_end = |from: usize| {
+        text.get(from..)
+            .and_then(|rest| rest.find('\n'))
+            .map_or(text.len(), |offset| from.saturating_add(offset))
+    };
+    let mut spans = strings.spans.iter().peekable();
+    let mut position = 0;
+    while let Some(&byte) = bytes.get(position) {
+        while spans.next_if(|span| span.end <= position).is_some() {}
+        if let Some(span) = spans.peek() {
+            if span.start <= position {
+                position = span.end;
+                continue;
+            }
+        }
+        let next = bytes.get(position.saturating_add(1)).copied();
+        position = match (byte, next) {
+            (b'#', _) => line_end(position),
+            (b'/', Some(b'*')) => text
+                .get(position.saturating_add(2)..)
+                .and_then(|rest| rest.find("*/"))
+                .map_or(text.len(), |offset| {
+                    position.saturating_add(offset).saturating_add(4)
+                }),
+            (b'/', Some(b'/')) => {
+                let end = line_end(position);
+                let comment = text.get(position..end).unwrap_or_default();
+                let end =
+                    end.saturating_sub(comment.len().saturating_sub(comment.trim_end().len()));
+                let start = position;
+                let diagnostic = error(
+                    "stricttf::comment_syntax",
+                    "`//` comments are non-idiomatic Terraform; start the comment with `#`",
+                    file.location(&(start..end)),
+                );
+                diagnostics.push(with_reparsed_fix(
+                    diagnostic,
+                    file,
+                    &(start..start.saturating_add(2)),
+                    "#".to_owned(),
+                ));
+                line_end(position)
+            }
+            _other => position.saturating_add(1),
+        };
     }
 }
 

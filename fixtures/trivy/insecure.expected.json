@@ -1,0 +1,352 @@
+{
+  "ok": false,
+  "error_count": 11,
+  "warning_count": 12,
+  "diagnostics": [
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0099",
+      "message": "Missing description for security group: Security group explicitly uses the default description. Add descriptions for all security groups (https://avd.aquasec.com/misconfig/aws-0099)",
+      "at": {
+        "file": "main.tf",
+        "line": 5,
+        "col": 1,
+        "end_line": 14,
+        "end_col": 2,
+        "snippet": "resource \"aws_security_group\" \"bastion\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0124",
+      "message": "Missing description for security group rule: Security group rule does not have a description. Add descriptions for all security groups rules (https://avd.aquasec.com/misconfig/aws-0124)",
+      "at": {
+        "file": "main.tf",
+        "line": 8,
+        "col": 1,
+        "end_line": 13,
+        "end_col": 4,
+        "snippet": "  ingress {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0107",
+      "message": "Security groups should not allow unrestricted ingress to SSH or RDP from any IP address: Security group rule allows unrestricted ingress from any IP address. Set a more restrictive CIDR range (https://avd.aquasec.com/misconfig/aws-0107)",
+      "at": {
+        "file": "main.tf",
+        "line": 12,
+        "col": 1,
+        "end_line": 12,
+        "end_col": 32,
+        "snippet": "    cidr_blocks = [\"0.0.0.0/0\"]"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0124",
+      "message": "Missing description for security group rule: Security group rule does not have a description. Add descriptions for all security groups rules (https://avd.aquasec.com/misconfig/aws-0124)",
+      "at": {
+        "file": "main.tf",
+        "line": 16,
+        "col": 1,
+        "end_line": 23,
+        "end_col": 2,
+        "snippet": "resource \"aws_security_group_rule\" \"everything\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0107",
+      "message": "Security groups should not allow unrestricted ingress to SSH or RDP from any IP address: Security group rule allows unrestricted ingress from any IP address. Set a more restrictive CIDR range (https://avd.aquasec.com/misconfig/aws-0107)",
+      "at": {
+        "file": "main.tf",
+        "line": 21,
+        "col": 1,
+        "end_line": 21,
+        "end_col": 31,
+        "snippet": "  ipv6_cidr_blocks  = [\"::/0\"]"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0124",
+      "message": "Missing description for security group rule: Security group rule does not have a description. Add descriptions for all security groups rules (https://avd.aquasec.com/misconfig/aws-0124)",
+      "at": {
+        "file": "main.tf",
+        "line": 25,
+        "col": 1,
+        "end_line": 31,
+        "end_col": 2,
+        "snippet": "resource \"aws_vpc_security_group_ingress_rule\" \"rdp\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0107",
+      "message": "Security groups should not allow unrestricted ingress to SSH or RDP from any IP address: Security group rule allows unrestricted ingress from any IP address. Set a more restrictive CIDR range (https://avd.aquasec.com/misconfig/aws-0107)",
+      "at": {
+        "file": "main.tf",
+        "line": 27,
+        "col": 1,
+        "end_line": 27,
+        "end_col": 34,
+        "snippet": "  cidr_ipv4         = \"0.0.0.0/0\""
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0086",
+      "message": "S3 Access block should block public ACL: No public access block so not blocking public acls. Enable blocking any PUT calls with a public ACL specified (https://avd.aquasec.com/misconfig/aws-0086)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0087",
+      "message": "S3 Access block should block public policy: No public access block so not blocking public policies. Prevent policies that allow public access being PUT (https://avd.aquasec.com/misconfig/aws-0087)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0089",
+      "message": "S3 Bucket Logging: Bucket has logging disabled. Add a logging block to the resource to enable access logging (https://avd.aquasec.com/misconfig/aws-0089)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0090",
+      "message": "S3 Data should be versioned: Bucket does not have versioning enabled. Enable versioning to protect against accidental/malicious removal or modification (https://avd.aquasec.com/misconfig/aws-0090)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0091",
+      "message": "S3 Access Block should Ignore Public ACL: No public access block so not blocking public acls. Enable ignoring the application of public ACLs in PUT calls (https://avd.aquasec.com/misconfig/aws-0091)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0093",
+      "message": "S3 Access block should restrict public bucket to limit access: No public access block so not restricting public buckets. Limit the access to public buckets to only the owner or AWS Services (eg; CloudFront) (https://avd.aquasec.com/misconfig/aws-0093)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0094",
+      "message": "S3 buckets should each define an aws_s3_bucket_public_access_block: Bucket does not have a corresponding public access block. Define a aws_s3_bucket_public_access_block for the given bucket to control public access policies (https://avd.aquasec.com/misconfig/aws-0094)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0132",
+      "message": "S3 encryption should use Customer Managed Keys: Bucket does not encrypt data with a customer managed key. Use SSE-KMS with a customer managed key (CMK) (https://avd.aquasec.com/misconfig/aws-0132)",
+      "at": {
+        "file": "main.tf",
+        "line": 33,
+        "col": 1,
+        "end_line": 35,
+        "end_col": 2,
+        "snippet": "resource \"aws_s3_bucket\" \"site\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0092",
+      "message": "S3 Buckets not publicly accessible through ACL: Bucket has a public ACL: \"public-read\". Don't use canned ACLs or switch to private acl (https://avd.aquasec.com/misconfig/aws-0092)",
+      "at": {
+        "file": "main.tf",
+        "line": 39,
+        "col": 1,
+        "end_line": 39,
+        "end_col": 25,
+        "snippet": "  acl    = \"public-read\""
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0077",
+      "message": "RDS Cluster and RDS instance should have backup retention longer than default 1 day: Instance has very low backup retention period. Explicitly set the retention period to greater than the default (https://avd.aquasec.com/misconfig/aws-0077)",
+      "at": {
+        "file": "main.tf",
+        "line": 42,
+        "col": 1,
+        "end_line": 50,
+        "end_col": 2,
+        "snippet": "resource \"aws_db_instance\" \"main\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0080",
+      "message": "RDS encryption has not been enabled at a DB Instance level: Instance does not have storage encryption enabled. Enable encryption for RDS instances (https://avd.aquasec.com/misconfig/aws-0080)",
+      "at": {
+        "file": "main.tf",
+        "line": 42,
+        "col": 1,
+        "end_line": 50,
+        "end_col": 2,
+        "snippet": "resource \"aws_db_instance\" \"main\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0133",
+      "message": "Enable Performance Insights to detect potential problems: Instance does not have performance insights enabled. Enable performance insights (https://avd.aquasec.com/misconfig/aws-0133)",
+      "at": {
+        "file": "main.tf",
+        "line": 42,
+        "col": 1,
+        "end_line": 50,
+        "end_col": 2,
+        "snippet": "resource \"aws_db_instance\" \"main\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0176",
+      "message": "RDS IAM Database Authentication Disabled: Instance does not have IAM Authentication enabled. Modify the PostgreSQL and MySQL type RDS instances to enable IAM database authentication. (https://avd.aquasec.com/misconfig/aws-0176)",
+      "at": {
+        "file": "main.tf",
+        "line": 42,
+        "col": 1,
+        "end_line": 50,
+        "end_col": 2,
+        "snippet": "resource \"aws_db_instance\" \"main\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0177",
+      "message": "RDS Deletion Protection Disabled: Instance does not have Deletion Protection enabled. Modify the RDS instances to enable deletion protection. (https://avd.aquasec.com/misconfig/aws-0177)",
+      "at": {
+        "file": "main.tf",
+        "line": 42,
+        "col": 1,
+        "end_line": 50,
+        "end_col": 2,
+        "snippet": "resource \"aws_db_instance\" \"main\" {"
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0180",
+      "message": "RDS Publicly Accessible: Instance has Public Access enabled. Remove the public endpoint from the RDS instance. (https://avd.aquasec.com/misconfig/aws-0180)",
+      "at": {
+        "file": "main.tf",
+        "line": 49,
+        "col": 1,
+        "end_line": 49,
+        "end_col": 29,
+        "snippet": "  publicly_accessible = true"
+      },
+      "fixes": []
+    },
+    {
+      "level": "warning",
+      "source": "trivy",
+      "code": "trivy::AWS-0066",
+      "message": "Lambda functions should have X-Ray tracing enabled: Function does not have tracing enabled. Enable tracing (https://avd.aquasec.com/misconfig/aws-0066)",
+      "at": {
+        "file": "main.tf",
+        "line": 52,
+        "col": 1,
+        "end_line": 66,
+        "end_col": 2,
+        "snippet": "resource \"aws_lambda_function\" \"worker\" {"
+      },
+      "fixes": []
+    }
+  ]
+}

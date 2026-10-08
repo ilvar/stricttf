@@ -18,6 +18,7 @@ env:
   # unannounced. Keep TERRAFORM_VERSION in step with .terraform-version.
   TERRAFORM_VERSION: 1.16.5
   TFLINT_VERSION: v0.64.0
+  TRIVY_VERSION: v0.75.0
   TF_IN_AUTOMATION: "1"
 
 jobs:
@@ -37,6 +38,13 @@ jobs:
           # The wrapper rewrites stdout; stricttf's report must reach the
           # file below byte for byte.
           terraform_wrapper: false
+
+      # stricttf runs trivy as its security-scan layer. Pinned by commit,
+      # not tag, because this installer is itself a supply-chain target.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
 
       - name: Install TFLint
         uses: terraform-linters/setup-tflint@v6

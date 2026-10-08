@@ -26,6 +26,7 @@ pub mod skills;
 pub mod source;
 pub mod template;
 pub mod tfcli;
+pub mod trivy;
 
 use crate::hcl::{ParsedFile, SourceFile};
 use crate::report::{Diagnostic, Location, Report, LEVEL_ERROR};
@@ -61,8 +62,8 @@ pub struct ModuleSources {
     pub variable_files: Vec<SourceFile>,
     /// `tests/*.tftest.hcl` files, in path order.
     pub test_files: Vec<SourceFile>,
-    /// Whether `.terraform.lock.hcl` exists beside the configuration.
-    pub has_lock_file: bool,
+    /// `.terraform.lock.hcl` beside the configuration, when it exists.
+    pub lock_file: Option<SourceFile>,
 }
 
 /// The parsed module the rule layers inspect. Files that failed to parse
@@ -71,7 +72,10 @@ pub struct ModuleSources {
 pub struct Module {
     pub configuration: Vec<ParsedFile>,
     pub variable_files: Vec<ParsedFile>,
+    /// Whether `.terraform.lock.hcl` exists, whether or not it parsed.
     pub has_lock_file: bool,
+    /// The parsed lock file, when it exists and is valid HCL.
+    pub lock_file: Option<ParsedFile>,
     /// Whether every `.tf` file parsed. When one did not, a module-wide
     /// conclusion that something is absent or unused could be false --
     /// the missing declaration or reference may be in the broken file --
@@ -102,6 +106,7 @@ pub fn run_check_with_depth(module_dir: &Path, depth: Depth) -> Result<Report, S
 
     if let (true, Some(binary)) = (checkable, binary) {
         diagnostics.extend(tfcli::check(module_dir, binary, &sources)?);
+        diagnostics.extend(trivy::check(module_dir, &sources)?);
     }
 
     Ok(Report::build(diagnostics))
@@ -128,11 +133,15 @@ pub fn check_sources(sources: &ModuleSources) -> (Vec<Diagnostic>, bool) {
     let parsable = configuration.len() == sources.configuration.len();
     let variable_files = parse_all(&sources.variable_files, &mut diagnostics);
     let _tests = parse_all(&sources.test_files, &mut diagnostics);
+    let lock_file = parse_all(sources.lock_file.as_slice(), &mut diagnostics)
+        .into_iter()
+        .next();
 
     let module = Module {
         configuration,
         variable_files,
-        has_lock_file: sources.has_lock_file,
+        has_lock_file: sources.lock_file.is_some(),
+        lock_file,
         complete: parsable,
     };
     diagnostics.extend(source::check(&module));
@@ -150,6 +159,18 @@ fn parse_all(files: &[SourceFile], diagnostics: &mut Vec<Diagnostic>) -> Vec<Par
         }
     }
     parsed
+}
+
+/// The file `name` directly in `directory`, if it exists.
+fn read_optional(directory: &Path, name: &str) -> Result<Option<SourceFile>, String> {
+    let path = directory.join(name);
+    if !capability::is_file(&path) {
+        return Ok(None);
+    }
+    Ok(Some(SourceFile {
+        path: name.to_owned(),
+        text: capability::read_to_string(&path)?,
+    }))
 }
 
 /// Check, apply mechanical fixes, and re-check until the loop stops.
@@ -206,7 +227,7 @@ pub fn read_module(module_dir: &Path) -> Result<ModuleSources, String> {
         configuration,
         variable_files,
         test_files,
-        has_lock_file: capability::is_file(&module_dir.join(LOCK_FILE)),
+        lock_file: read_optional(module_dir, LOCK_FILE)?,
     })
 }
 

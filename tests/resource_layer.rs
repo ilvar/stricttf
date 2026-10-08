@@ -8,9 +8,11 @@ use support::{check_files, codes, module_fixture, with_code};
 
 const RESOURCE_CODES: &[&str] = &[
     "stricttf::hardcoded_secret",
+    "stricttf::lambda_url_unauthenticated",
     "stricttf::open_admin_ingress",
     "stricttf::public_bucket_acl",
     "stricttf::public_database",
+    "stricttf::public_principal",
     "stricttf::wildcard_iam_action",
 ];
 
@@ -625,6 +627,248 @@ locals {
     );
 }
 
+// --- public_principal --------------------------------------------------
+
+#[test]
+fn public_principal_in_jsonencode_resource_policies_is_reported_at_the_star() {
+    let text = r#"resource "aws_s3_bucket_policy" "site" {
+  bucket = "site"
+  policy = jsonencode({
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+      },
+      {
+        "Principal" = { "AWS" = ["arn:aws:iam::111122223333:root", "*"] }
+        Action      = "s3:GetObject"
+      },
+    ]
+  })
+}
+
+resource "aws_sqs_queue_policy" "jobs" {
+  queue_url = "jobs"
+  policy = jsonencode({
+    Statement = [{ Effect = "Allow", Principal = { AWS = "*" }, Action = "sqs:SendMessage" }]
+  })
+}
+
+resource "aws_glacier_vault" "archive" {
+  name = "archive"
+  access_policy = jsonencode({
+    Statement = [{ Principal = "*", Action = "glacier:InitiateJob" }]
+  })
+}
+"#;
+    let report = check(text);
+    let found = with_code(&report, "stricttf::public_principal");
+    assert_eq!(
+        positions(&report, "stricttf::public_principal"),
+        vec![(7, 21), (11, 68), (21, 58), (28, 32)],
+        "{:?}",
+        codes(&report)
+    );
+    for diagnostic in &found {
+        assert_eq!(located_text(text, diagnostic), "\"*\"");
+        assert_eq!(diagnostic.level, "error");
+    }
+}
+
+#[test]
+fn public_principal_in_policy_documents_and_lambda_permissions_is_reported() {
+    let text = r#"data "aws_iam_policy_document" "public" {
+  statement {
+    actions = ["s3:GetObject"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["sqs:SendMessage"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::111122223333:root", "*"]
+    }
+  }
+}
+
+resource "aws_lambda_permission" "anyone" {
+  action        = "lambda:InvokeFunction"
+  function_name = "worker"
+  principal     = "*"
+}
+"#;
+    let report = check(text);
+    let found = with_code(&report, "stricttf::public_principal");
+    assert_eq!(
+        positions(&report, "stricttf::public_principal"),
+        vec![(7, 22), (17, 56), (25, 19)],
+        "{:?}",
+        codes(&report)
+    );
+    for diagnostic in &found {
+        assert_eq!(located_text(text, diagnostic), "\"*\"");
+    }
+}
+
+#[test]
+fn specific_conditioned_denied_and_service_principals_are_not_public() {
+    let text = r#"variable "effect" {
+  type = string
+}
+
+resource "aws_s3_bucket_policy" "logs" {
+  bucket = "logs"
+  policy = jsonencode({
+    Statement = [
+      { Effect = "Allow", Principal = { AWS = "arn:aws:iam::111122223333:root" }, Action = "s3:GetObject" },
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Condition = { StringEquals = { "aws:SourceVpce" = "vpce-1a2b3c4d" } }
+      },
+      {
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      },
+      { Effect = "Deny", Principal = { AWS = "*" }, Action = "s3:DeleteBucket" },
+      { Effect = "Allow", Principal = { Service = "logging.s3.amazonaws.com" }, Action = "s3:PutObject" },
+      { Effect = var.effect, Principal = "*", Action = "s3:GetObject" },
+      { Effect = "Allow", Principal = var.principal, Action = "s3:GetObject" },
+      { Effect = "Allow", NotPrincipal = "*", Action = "s3:GetObject" },
+    ]
+  })
+}
+
+locals {
+  unencoded = { policy = { Effect = "Allow", Principal = "*" } }
+}
+
+data "aws_iam_policy_document" "guard" {
+  statement {
+    actions = ["s3:GetObject"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalOrgID"
+      values   = ["o-a1b2c3d4e5"]
+    }
+  }
+
+  statement {
+    effect  = "Deny"
+    actions = ["s3:*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    actions = ["s3:PutObject"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    actions = ["s3:GetObject"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::111122223333:root"]
+    }
+  }
+}
+
+resource "aws_lambda_permission" "s3" {
+  action        = "lambda:InvokeFunction"
+  function_name = "worker"
+  principal     = "s3.amazonaws.com"
+  source_arn    = "arn:aws:s3:::logs"
+}
+
+resource "aws_lambda_permission" "account" {
+  action         = "lambda:InvokeFunction"
+  function_name  = "worker"
+  principal      = "*"
+  source_account = "111122223333"
+}
+
+resource "aws_lambda_permission" "organization" {
+  action           = "lambda:InvokeFunction"
+  function_name    = "worker"
+  principal        = "*"
+  principal_org_id = "o-a1b2c3d4e5"
+}
+"#;
+    let report = check(text);
+    assert!(
+        with_code(&report, "stricttf::public_principal").is_empty(),
+        "{:?}",
+        with_code(&report, "stricttf::public_principal")
+    );
+}
+
+// --- lambda_url_unauthenticated ----------------------------------------
+
+#[test]
+fn unauthenticated_function_url_is_reported_at_the_value() {
+    let text = r#"resource "aws_lambda_function_url" "public" {
+  function_name      = "worker"
+  authorization_type = "none"
+}
+"#;
+    let report = check(text);
+    let found = with_code(&report, "stricttf::lambda_url_unauthenticated");
+    assert_eq!(found.len(), 1, "{:?}", codes(&report));
+    assert_eq!((found[0].at.line, found[0].at.col), (3, 24));
+    assert_eq!(located_text(text, found[0]), "\"none\"");
+    assert_eq!(found[0].level, "error");
+}
+
+#[test]
+fn iam_and_computed_function_url_authorization_is_not_reported() {
+    let text = r#"variable "authorization" {
+  type = string
+}
+
+resource "aws_lambda_function_url" "private" {
+  function_name      = "worker"
+  authorization_type = "AWS_IAM"
+}
+
+resource "aws_lambda_function_url" "computed" {
+  function_name      = "worker"
+  authorization_type = var.authorization
+}
+"#;
+    let report = check(text);
+    assert!(
+        with_code(&report, "stricttf::lambda_url_unauthenticated").is_empty(),
+        "{:?}",
+        codes(&report)
+    );
+}
+
 // --- fixtures ----------------------------------------------------------
 
 #[test]
@@ -664,9 +908,9 @@ proptest! {
 
     #[test]
     fn resource_shaped_input_never_panics(
-        kind in "(aws_security_group|aws_security_group_rule|aws_vpc_security_group_ingress_rule|aws_s3_bucket_acl|aws_db_instance)",
-        key in "(password|cidr_blocks|cidr_ipv4|from_port|to_port|protocol|ip_protocol|acl|publicly_accessible|type)",
-        value in "(\"\"|\"0.0.0.0/0\"|\\[\"::/0\"\\]|-1|22|99999999999999999999|true|var\\.x|jsonencode\\(\\{Action = \"\\*\"\\}\\)|\"\\PC{0,8}\")",
+        kind in "(aws_security_group|aws_security_group_rule|aws_vpc_security_group_ingress_rule|aws_s3_bucket_acl|aws_db_instance|aws_lambda_permission|aws_lambda_function_url|aws_s3_bucket_policy)",
+        key in "(password|cidr_blocks|cidr_ipv4|from_port|to_port|protocol|ip_protocol|acl|publicly_accessible|type|principal|authorization_type|policy)",
+        value in "(\"\"|\"0.0.0.0/0\"|\\[\"::/0\"\\]|-1|22|99999999999999999999|true|var\\.x|jsonencode\\(\\{Action = \"\\*\"\\}\\)|jsonencode\\(\\{Principal = \\{AWS = \\[\"\\*\"\\]\\}\\}\\)|\"\\PC{0,8}\")",
     ) {
         let text = format!(
             "resource \"{kind}\" \"x\" {{\n  {key} = {value}\n  ingress {{\n    {key} = {value}\n  }}\n}}\n"

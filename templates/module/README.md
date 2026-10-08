@@ -35,6 +35,7 @@ module "example" {
 | --- | --- | --- |
 | [`terraform`](https://developer.hashicorp.com/terraform) 1.6+ (CI pins the version in `.terraform-version`) | fmt, init, validate, test | yes |
 | [`stricttf`](https://github.com/ilvar/stricttf) | strict-subset gate | yes |
+| [`trivy`](https://github.com/aquasecurity/trivy) 0.75.0 | security scan, run inside `stricttf check` | optional; reported as a `trivy::unavailable` warning when absent |
 | [`tflint`](https://github.com/terraform-linters/tflint) | extra lint rules | optional |
 
 ## The gate

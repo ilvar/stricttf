@@ -1,7 +1,11 @@
+stricttf::comment_syntax
+stricttf::count_over_collection
+stricttf::deprecated_index
 stricttf::external_program
 stricttf::ignore_changes_all
 stricttf::interpolation_only
-stricttf::lock_file_missing
+stricttf::lock_file_single_platform
+stricttf::module_depends_on
 stricttf::module_ref_missing
 stricttf::module_version_inexact
 stricttf::module_version_missing
@@ -14,7 +18,9 @@ stricttf::provider_version_missing
 stricttf::provider_version_unbounded
 stricttf::provisioner
 stricttf::quoted_type_constraint
-stricttf::required_version_missing
+stricttf::remote_state_coupling
+stricttf::required_version_unbounded
+stricttf::sensitive_output_unmarked
 stricttf::sensitive_variable_unmarked
 stricttf::tfvars_undeclared
 stricttf::unused_local

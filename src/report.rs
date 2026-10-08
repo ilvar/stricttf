@@ -16,6 +16,8 @@ pub const LEVEL_WARNING: &str = "warning";
 
 /// A diagnostic produced by the `terraform` (or `tofu`) binary itself.
 pub const SOURCE_TERRAFORM: &str = "terraform";
+/// A diagnostic normalised from a `trivy config` misconfiguration scan.
+pub const SOURCE_TRIVY: &str = "trivy";
 /// A diagnostic produced by a `stricttf` rule.
 pub const SOURCE_STRICTTF: &str = "stricttf";
 

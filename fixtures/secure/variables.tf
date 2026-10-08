@@ -9,3 +9,8 @@ variable "password_length" {
   description = "Minimum length the account password policy requires."
   default     = 16
 }
+
+variable "organization_id" {
+  type        = string
+  description = "AWS Organizations ID whose accounts may read the logs."
+}

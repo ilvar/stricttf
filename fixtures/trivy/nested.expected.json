@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "error_count": 1,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "trivy",
+      "code": "trivy::AWS-0107",
+      "message": "Security groups should not allow unrestricted ingress to SSH or RDP from any IP address: Security group rule allows unrestricted ingress from any IP address. Set a more restrictive CIDR range (https://avd.aquasec.com/misconfig/aws-0107)",
+      "at": {
+        "file": "main.tf",
+        "line": 14,
+        "col": 1,
+        "end_line": 14,
+        "end_col": 32,
+        "snippet": "    cidr_blocks = [\"0.0.0.0/0\"]"
+      },
+      "fixes": []
+    }
+  ]
+}

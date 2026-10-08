@@ -43,7 +43,7 @@ fn check_module(configuration: &[(&str, &str)], tfvars: &[(&str, &str)], lock: b
             .map(|(path, text)| source(path, text))
             .collect(),
         test_files: Vec::new(),
-        has_lock_file: lock,
+        lock_file: lock.then(|| source(".terraform.lock.hcl", "")),
     };
     let (diagnostics, _checkable) = stricttf::check_sources(&sources);
     Report::build(diagnostics)
@@ -804,6 +804,299 @@ fn required_version_is_never_located_in_an_override_file() {
         at(only(&report, "stricttf::required_version_missing")),
         ("main.tf", 1, 1)
     );
+}
+
+// --- required_version bounds ------------------------------------------------------------
+
+fn versions_with(required: &str) -> String {
+    VERSIONS.replace("\"~> 1.9\"", &format!("\"{required}\""))
+}
+
+#[test]
+fn a_lower_bound_only_required_version_is_unbounded_at_the_value() {
+    for required in [">= 1.6.0", "> 1.5", ">= 1.6, != 1.7.0"] {
+        let versions = versions_with(required);
+        let report = check_module(&[("versions.tf", &versions)], &[], true);
+        let finding = only(&report, "stricttf::required_version_unbounded");
+        assert_eq!(finding.level, "error");
+        assert_eq!(at(finding), ("versions.tf", 2, 22), "{required}");
+        assert_eq!(
+            finding.at.end_col,
+            24 + u64::try_from(required.len()).expect("short"),
+            "{required}"
+        );
+        absent(&report, "stricttf::required_version_missing");
+    }
+}
+
+#[test]
+fn a_capped_required_version_is_accepted() {
+    for required in [
+        "~> 1.9",
+        ">= 1.6.0, < 2.0.0",
+        "<= 1.16.5",
+        "1.16.5",
+        "= 1.16.5",
+    ] {
+        let versions = versions_with(required);
+        let report = check_module(&[("versions.tf", &versions)], &[], true);
+        assert!(report.diagnostics.is_empty(), "{required}: {report:#?}");
+    }
+}
+
+// --- count over a collection ------------------------------------------------------------
+
+#[test]
+fn count_over_the_length_of_a_collection_is_located_at_the_value() {
+    for block in [
+        "resource \"aws_instance\" \"web\"",
+        "data \"aws_ami\" \"web\"",
+        "module \"web\"",
+    ] {
+        let main = format!("{block} {{\n  count = length(var.names)\n}}\n");
+        let finding = only(&check_main(&main), "stricttf::count_over_collection").clone();
+        assert_eq!(at(&finding), ("main.tf", 2, 11), "{block}");
+        assert_eq!(finding.at.end_col, 28, "{block}");
+    }
+}
+
+#[test]
+fn toggles_constants_and_for_each_are_not_count_over_a_collection() {
+    for meta in [
+        "count = var.enabled ? 1 : 0",
+        "count = 3",
+        "count = length(var.names) > 0 ? 1 : 0",
+        "for_each = toset(var.names)",
+        "count = provider::ns::length(var.names)",
+    ] {
+        let main = format!("resource \"aws_instance\" \"web\" {{\n  {meta}\n}}\n");
+        absent(&check_main(&main), "stricttf::count_over_collection");
+    }
+    let local = "locals {\n  count = length(var.names)\n}\n";
+    absent(&check_main(local), "stricttf::count_over_collection");
+}
+
+// --- deprecated index syntax ------------------------------------------------------------
+
+/// Each `deprecated_index` finding as `(line, col, end_col, fix)`.
+fn deprecated_indexes(main: &str) -> Vec<(u64, u64, u64, Option<String>)> {
+    with_code(&check_main(main), "stricttf::deprecated_index")
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.at.line,
+                diagnostic.at.col,
+                diagnostic.at.end_col,
+                diagnostic.fixes.first().map(|fix| fix.replace_with.clone()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_legacy_dot_index_is_fixed_to_brackets() {
+    let main = "locals {\n  a = aws_instance.web.0.id\n  b = \"${aws_instance.web.12.id}\"\n}\n";
+    assert_eq!(
+        deprecated_indexes(main),
+        vec![
+            (2, 23, 25, Some("[0]".to_owned())),
+            (3, 26, 29, Some("[12]".to_owned())),
+        ]
+    );
+}
+
+#[test]
+fn an_attribute_splat_is_fixed_only_when_no_index_or_splat_follows() {
+    let main = "locals {\n  a = aws_instance.web.*.id\n  b = aws_instance.web.*.ids[0]\n  c = aws_instance.web.*.ids.0\n  d = aws_instance.web.*.tags.*.name\n}\n";
+    assert_eq!(
+        deprecated_indexes(main),
+        vec![
+            (2, 23, 25, Some("[*]".to_owned())),
+            (3, 23, 25, None),
+            // `.0` after `.*` is captured by the splat; `[0]` would not be.
+            (4, 23, 25, None),
+            (4, 29, 31, None),
+            (5, 23, 25, None),
+            (5, 30, 32, None),
+        ]
+    );
+}
+
+#[test]
+fn bracket_indexes_and_full_splats_are_accepted() {
+    let main = "locals {\n  a = aws_instance.web[0].id\n  b = aws_instance.web[*].ids[0]\n  c = var.map[\"k\"].v\n  d = (aws_instance.web[*].ids)[0]\n}\n";
+    assert!(deprecated_indexes(main).is_empty());
+}
+
+// --- comment syntax ---------------------------------------------------------------------
+
+#[test]
+fn a_double_slash_comment_is_located_and_fixed_to_a_hash() {
+    let main = "// leading\nlocals {\n  a = 1 // trailing  \n}\n";
+    let report = check_main(main);
+    let found = with_code(&report, "stricttf::comment_syntax");
+    let places: Vec<_> = found
+        .iter()
+        .map(|diagnostic| {
+            let fix = &diagnostic.fixes[0];
+            (
+                at(diagnostic),
+                diagnostic.at.end_col,
+                (fix.line, fix.col, fix.end_col, fix.replace_with.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        places,
+        vec![
+            (("main.tf", 1, 1), 11, (1, 1, 3, "#")),
+            (("main.tf", 3, 9), 20, (3, 9, 11, "#")),
+        ]
+    );
+}
+
+#[test]
+fn the_fixed_comment_reparses_and_is_not_reported_again() {
+    let fixed = "# leading\nlocals {\n  a = 1 # trailing\n}\n";
+    stricttf::hcl::parse(&source("main.tf", fixed)).expect("fixed file should parse");
+    absent(&check_main(fixed), "stricttf::comment_syntax");
+}
+
+#[test]
+fn double_slashes_in_strings_heredocs_labels_and_other_comments_are_accepted() {
+    let main = "locals {\n  url = \"https://example.com//path\"\n  tpl = \"${var.x}//${var.y}\"\n  doc = <<EOT\n  // not a comment\nEOT\n  key = { \"a//b\" = 1 }\n  /* block // comment */\n  # hash // comment\n  q = 4 / 2\n}\n\nresource \"aws_s3_bucket\" \"x\" {\n  bucket = \"a//b\"\n}\n";
+    absent(&check_main(main), "stricttf::comment_syntax");
+}
+
+#[test]
+fn a_double_slash_comment_in_a_tfvars_file_is_reported() {
+    let report = check_module(
+        &[("versions.tf", VERSIONS)],
+        &[("terraform.tfvars", "// note\n")],
+        true,
+    );
+    assert_eq!(
+        at(only(&report, "stricttf::comment_syntax")),
+        ("terraform.tfvars", 1, 1)
+    );
+}
+
+// --- sensitive outputs ------------------------------------------------------------------
+
+fn output(name: &str, extra: &str) -> String {
+    format!("output \"{name}\" {{\n  description = \"D.\"\n  value       = \"x\"\n{extra}}}\n")
+}
+
+#[test]
+fn a_credential_output_must_be_sensitive_at_its_label() {
+    for extra in ["", "  sensitive   = false\n"] {
+        let report = check_main(&output("db_password", extra));
+        let finding = only(&report, "stricttf::sensitive_output_unmarked");
+        assert_eq!(at(finding), ("main.tf", 1, 8));
+        assert_eq!(finding.at.end_col, 21);
+    }
+}
+
+#[test]
+fn sensitive_computed_or_non_credential_outputs_are_accepted() {
+    for main in [
+        output("db_password", "  sensitive   = true\n"),
+        output("db_password", "  sensitive   = var.hide\n"),
+        output("password_length", ""),
+        output("secret_arn", ""),
+    ] {
+        absent(&check_main(&main), "stricttf::sensitive_output_unmarked");
+    }
+    let report = check_module(
+        &[
+            ("main.tf", &output("db_password", "  sensitive   = true\n")),
+            (
+                "override.tf",
+                "output \"db_password\" {\n  value = \"y\"\n}\n",
+            ),
+            ("versions.tf", VERSIONS),
+        ],
+        &[],
+        true,
+    );
+    absent(&report, "stricttf::sensitive_output_unmarked");
+}
+
+// --- lock file platforms ----------------------------------------------------------------
+
+fn check_locked(lock: &str) -> Report {
+    let sources = ModuleSources {
+        configuration: vec![
+            source("main.tf", "resource \"aws_s3_bucket\" \"logs\" {}\n"),
+            source("versions.tf", VERSIONS),
+        ],
+        variable_files: Vec::new(),
+        test_files: Vec::new(),
+        lock_file: Some(source(".terraform.lock.hcl", lock)),
+    };
+    let (diagnostics, _checkable) = stricttf::check_sources(&sources);
+    Report::build(diagnostics)
+}
+
+fn lock_with(hashes: &[&str]) -> String {
+    let hashes: String = hashes
+        .iter()
+        .map(|hash| format!("    \"{hash}\",\n"))
+        .collect();
+    format!("# lock\n\nprovider \"registry.terraform.io/hashicorp/aws\" {{\n  version     = \"5.100.0\"\n  constraints = \"~> 5.0\"\n  hashes = [\n{hashes}  ]\n}}\n")
+}
+
+#[test]
+fn a_lock_entry_with_one_platform_hash_is_a_warning_at_the_provider_header() {
+    let report = check_locked(&lock_with(&[
+        "h1:Ijt7pOlB7Tr7maGQIqtsLFbl7pSMIj06TVdkoSBcYOw=",
+    ]));
+    let finding = only(&report, "stricttf::lock_file_single_platform");
+    assert_eq!(finding.level, "warning");
+    assert_eq!(at(finding), (".terraform.lock.hcl", 3, 1));
+    assert_eq!(finding.at.end_col, 47);
+    assert!(finding
+        .message
+        .contains("terraform providers lock -platform=linux_amd64 -platform=darwin_arm64"));
+    absent(&report, "stricttf::lock_file_missing");
+}
+
+#[test]
+fn a_registry_lock_or_a_multi_platform_lock_is_accepted() {
+    let registry = support::fixture_text("clean/.terraform.lock.hcl");
+    absent(
+        &check_locked(&registry),
+        "stricttf::lock_file_single_platform",
+    );
+    let mirrored = lock_with(&["h1:aaaa", "h1:bbbb"]);
+    absent(
+        &check_locked(&mirrored),
+        "stricttf::lock_file_single_platform",
+    );
+}
+
+// --- coupling and ordering --------------------------------------------------------------
+
+#[test]
+fn remote_state_is_a_warning_at_the_data_header() {
+    let main = "data \"terraform_remote_state\" \"net\" {\n  backend = \"local\"\n}\n";
+    let finding = only(&check_main(main), "stricttf::remote_state_coupling").clone();
+    assert_eq!(finding.level, "warning");
+    assert_eq!(at(&finding), ("main.tf", 1, 1));
+    assert_eq!(finding.at.end_col, 36);
+    let ssm = "data \"aws_ssm_parameter\" \"vpc_id\" {\n  name = \"/network/vpc_id\"\n}\n";
+    absent(&check_main(ssm), "stricttf::remote_state_coupling");
+}
+
+#[test]
+fn depends_on_in_a_module_is_a_warning_at_the_attribute() {
+    let main = "module \"app\" {\n  source     = \"./app\"\n  depends_on = [aws_iam_role.app]\n}\n";
+    let finding = only(&check_main(main), "stricttf::module_depends_on").clone();
+    assert_eq!(finding.level, "warning");
+    assert_eq!(at(&finding), ("main.tf", 3, 3));
+    assert_eq!(finding.at.end_col, 34);
+    let resource = "resource \"aws_instance\" \"web\" {\n  depends_on = [aws_iam_role.app]\n}\n";
+    absent(&check_main(resource), "stricttf::module_depends_on");
 }
 
 // --- fixtures ----------------------------------------------------------------------------

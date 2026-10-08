@@ -64,11 +64,22 @@ Registry module calls pin one exact `version`; git module sources carry a
 bare (`var.name`, not `"${var.name}"`), types unquoted (`string`, not
 `"string"`). `timestamp()`, `uuid()`, `bcrypt()`, `plantimestamp()`,
 provisioners, and `data "external"` are rejected, and
-`lifecycle { ignore_changes = all }` is a warning.
+`lifecycle { ignore_changes = all }` is a warning. `required_version` has
+an upper bound; `count = length(...)` is replaced by `for_each`; comments
+use `#`; indexes and splats use `[0]` and `[*]`; credential-named outputs
+are `sensitive`. `terraform_remote_state` and `depends_on` on module calls
+are warnings.
 
 Literal credentials anywhere in configuration or `.tfvars`, world-open
 ingress to SSH, RDP, or every port, public S3 ACLs, publicly accessible
-databases, and IAM `Allow` statements granting `"*"` are rejected.
+databases, IAM `Allow` statements granting `"*"`, resource policies open
+to principal `"*"` without a condition, and unauthenticated Lambda function
+URLs are rejected.
+
+When `trivy` is installed, `stricttf check` also runs its embedded checks and
+reports each failure as `trivy::<ID>`; HIGH and CRITICAL are errors. A
+`trivy::unavailable` warning means the scan did not run — say so rather
+than calling the module scanned.
 
 ## Generated modules
 

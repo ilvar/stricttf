@@ -1,0 +1,5 @@
+severity:
+  - CRITICAL
+misconfiguration:
+  scanners:
+    - dockerfile

@@ -23,7 +23,11 @@ require() {
 require terraform
 require stricttf
 
-echo "==> stricttf check"
+if have trivy; then
+  echo "==> stricttf check (with the trivy security scan)"
+else
+  echo "==> stricttf check (trivy security scan SKIPPED: trivy not installed)"
+fi
 stricttf check .
 
 echo "==> terraform fmt -check"

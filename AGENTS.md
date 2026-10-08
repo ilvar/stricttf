@@ -16,21 +16,37 @@ a plan or state reader, or any check that needs cloud credentials.
 
 ## Layer discipline
 
-The check pipeline has four layers and they are ordered by cost:
+The check pipeline has five layers and they are ordered by cost:
 
 1. module structure;
 2. configuration source;
 3. resource policy;
-4. terraform (`fmt`, `init -backend=false`, `validate -json`).
+4. terraform (`fmt`, `init -backend=false`, `validate -json`);
+5. security scan (`trivy config`).
 
 Rules belong to the earliest layer that can decide them. A rule that can be
 decided from source must not wait for Terraform; a rule that needs
 Terraform's evaluation must not be guessed at from source. Every layer
-reports everything it finds — never stop at the first defect. Layer 4 is
-skipped only when layer 1 proves a `.tf` file is not HCL.
+reports everything it finds — never stop at the first defect. Layers 4 and
+5 are skipped only when layer 1 proves a `.tf` file is not HCL.
 
 Rules decide only from literals. When a value is computed by an expression,
 the rule cannot know it and must stay silent.
+
+## Trivy discipline
+
+Trivy is the authority for broad cloud-misconfiguration policy. Do not
+re-implement a check trivy's embedded set already has; a resource-policy
+rule belongs here only when trivy lacks it, or when the defect is severe
+enough to catch with no trivy installed. Before adding an AWS rule, run the
+pinned trivy over a reproducing module and record whether it fires.
+
+The scan must stay deterministic and unweakenable: embedded checks only
+(`--skip-check-update`), the module's `.trivyignore` ignored, findings
+outside the module's own files dropped. Trivy's absence is the warning
+`trivy::unavailable`, never a silent skip. Bumping the pinned trivy changes
+the reported set; update CI, the generated workflow, help, README, and the
+goldens in one change.
 
 The terraform layer must leave the module exactly as it found it:
 `TF_DATA_DIR` points into a per-module cache outside the module, an existing
@@ -45,7 +61,7 @@ incompatible changes as breaking changes.
 Required properties:
 
 - output exactly one JSON document on stdout;
-- `source` is `stricttf` or `terraform`;
+- `source` is `stricttf`, `terraform`, or `trivy`;
 - `code` is stable; message text is not, and rules must be matched by code;
 - every diagnostic carries a located `at` span with 1-based positions,
   character columns, and an exclusive `end_col`;

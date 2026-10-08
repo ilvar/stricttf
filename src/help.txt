@@ -16,8 +16,12 @@ INSTALL
   Terraform must be on PATH for the full check; CI verifies against
   v1.16.5. When no terraform binary is found, an OpenTofu tofu binary is
   used instead. Modules from stricttf new need Terraform 1.6 or newer,
-  because they ship terraform test files. Installing the binary does not
-  modify your home directory; run install-skills for that.
+  because they ship terraform test files.
+
+  trivy is optional and runs the security-scan layer; CI verifies against
+  v0.75.0. Without it, the report carries a trivy::unavailable warning
+  instead of the scan. Installing the binary does not modify your home
+  directory; run install-skills for that.
 
 COMMANDS
 
@@ -29,7 +33,7 @@ COMMANDS
   stricttf [path]                  a bare path is treated as check
 
   -h, --help, help          any of these print this manual, from any position
-  --source-only             run only the layers that need no terraform binary
+  --source-only             run only the layers that need no external binary
 
   A path names one module: the directory whose *.tf files Terraform loads
   together. Nested module directories are not descended into; check each
@@ -80,7 +84,8 @@ OUTPUT CONTRACT
 
   level     "error" or "warning". Only errors affect ok and the exit code.
   source    "stricttf" for a subset rule, "terraform" for a normalised
-            terraform (or tofu) finding.
+            terraform (or tofu) finding, "trivy" for a normalised trivy
+            misconfiguration.
   code      a stable identifier. Match on this, never on message text.
   at        1-based line and column; columns count characters, and end_col
             points one past the last character. snippet is the full text
@@ -97,8 +102,8 @@ EXIT CODES
   0   no error diagnostics
   1   error diagnostics remain
   2   invocation or operational failure (bad arguments, missing terraform,
-      unreadable module, unparsable terraform output, refusal to overwrite
-      a modified skill)
+      unreadable module, unparsable terraform or trivy output, refusal to
+      overwrite a modified skill)
 
   Exit code 2 always means the check did not complete. Never treat it as
   a clean module.
@@ -117,13 +122,32 @@ CHECKING LAYERS
                            resource arguments.
   4. terraform             terraform fmt, init -backend=false, and
                            validate, normalised.
+  5. security scan         trivy config with its embedded checks,
+                           normalised.
 
-  Layer 4 is skipped when layer 1 proves a .tf file is not HCL. Terraform's
-  error for an unparsable file tells you strictly less than the located
-  syntax diagnostic already did.
+  Layers 4 and 5 are skipped when layer 1 proves a .tf file is not HCL.
+  Terraform's error for an unparsable file tells you strictly less than the
+  located syntax diagnostic already did.
 
   --source-only runs layers 1 to 3 only. Without it, a missing terraform
   binary is an operational failure rather than a silently reduced check.
+  A missing trivy binary is not: trivy is a third-party scanner with its
+  own opinions, so its absence is reported as the warning
+  trivy::unavailable, which is visible in every report but does not fail
+  one.
+
+  The security scan uses only the checks embedded in the trivy binary,
+  never a downloaded bundle, so the trivy version alone decides what it
+  reports. CRITICAL and HIGH findings are errors; MEDIUM, LOW, and UNKNOWN
+  are warnings. Only findings in this module's own files are reported;
+  nested module directories get theirs when checked themselves. Neither a
+  .trivyignore nor a trivy.yaml in the module is honoured, because a module
+  must not be able to weaken its own check. Inline #trivy:ignore:<ID>
+  comments are honoured -- trivy offers no way to disable them -- so treat
+  each one as an accepted risk a reviewer must see. trivy is not allowed to
+  download remote module sources; remote module calls are evaluated as
+  unknown. Where trivy and a resource-policy
+  rule both catch one defect, both are reported; fixing it clears both.
 
   When a .tf file is not HCL, the rules that conclude something is missing
   or unused across the whole module -- required_version_missing,
@@ -135,8 +159,8 @@ CHECKING LAYERS
   design, so they are not required to repeat a type, description, source,
   version, or sensitive flag the block they override already declares.
 
-  Files read: *.tf and *.tfvars in the module directory, and
-  tests/*.tftest.hcl. JSON configuration (*.tf.json) is checked by layer 4
+  Files read: *.tf and *.tfvars in the module directory,
+  .terraform.lock.hcl, and tests/*.tftest.hcl. JSON configuration (*.tf.json) is checked by layer 4
   only. Rules that need a value decide only from literals: a value computed
   from an expression is never guessed at.
 
@@ -151,13 +175,17 @@ STABLE CODES
   Module structure
 
   stricttf::no_configuration            the directory holds no .tf files
-  stricttf::syntax_error                a .tf, .tfvars, or .tftest.hcl file is not HCL
+  stricttf::syntax_error                a .tf, .tfvars, .tftest.hcl, or lock file
+                                        is not HCL
   stricttf::required_version_missing    no terraform { required_version }
+  stricttf::required_version_unbounded  a required_version with no upper bound
   stricttf::provider_undeclared         a provider used but not in required_providers
   stricttf::provider_source_missing     a required_providers entry with no source
   stricttf::provider_version_missing    a required_providers entry with no version
   stricttf::provider_version_unbounded  a provider version with no upper bound
   stricttf::lock_file_missing           warning; providers but no .terraform.lock.hcl
+  stricttf::lock_file_single_platform   warning; a lock entry only the platform
+                                        that wrote it can verify
   stricttf::tfvars_undeclared           a .tfvars assignment to an undeclared variable
 
   Configuration source
@@ -170,6 +198,8 @@ STABLE CODES
                                         sensitive = true, unless typed bool
                                         or number
   stricttf::output_missing_description
+  stricttf::sensitive_output_unmarked   a credential-named output without
+                                        sensitive = true
   stricttf::unused_variable             warning; declared but never read
   stricttf::unused_local                warning; declared but never read
   stricttf::module_version_missing      a registry module call with no version
@@ -183,6 +213,11 @@ STABLE CODES
   stricttf::ignore_changes_all          warning; lifecycle ignore_changes = all
   stricttf::name_not_snake_case         a resource, data, module, variable,
                                         output, or local name
+  stricttf::count_over_collection       count = length(...); use for_each
+  stricttf::deprecated_index            legacy .0 index or .* splat
+  stricttf::comment_syntax              a // comment; use #
+  stricttf::remote_state_coupling       warning; data "terraform_remote_state"
+  stricttf::module_depends_on           warning; depends_on on a module call
 
   Resource policy
 
@@ -193,12 +228,23 @@ STABLE CODES
   stricttf::public_bucket_acl           a public or authenticated-read S3 ACL
   stricttf::public_database             publicly_accessible = true
   stricttf::wildcard_iam_action         an Allow statement granting "*"
+  stricttf::public_principal            a resource policy allowing principal
+                                        "*" with no condition
+  stricttf::lambda_url_unauthenticated  a Lambda function URL with
+                                        authorization_type NONE
 
   Terraform
 
   terraform::fmt        the file is not in terraform fmt canonical style
   terraform::init       terraform init failed; validate was not run
   terraform::validate   a normalised terraform validate diagnostic
+
+  Security scan
+
+  trivy::unavailable    warning; no trivy on PATH, so the scan did not run
+  trivy::<ID>           a failed trivy check, coded with trivy's own ID,
+                        e.g. trivy::AWS-0107; the message links its
+                        documentation
 
 WHY THE STRICT RULES EXIST
 
@@ -232,6 +278,17 @@ WHY THE STRICT RULES EXIST
                           effect is invisible to review and impossible to
                           diff. Use user_data, cloud-init, or a
                           configuration-management tool.
+  count_over_collection   count = length(var.names) addresses each object by
+                          position, so removing one element shifts every
+                          later index and destroys and recreates those
+                          objects. for_each over a map or set keys them by
+                          name.
+  lock_file_single_platform
+                          A lock entry with no zh: hashes and one h1: hash
+                          verifies only the platform that wrote it (typical
+                          of a plugin cache or mirror), so init on any other
+                          platform fails. Run terraform providers lock
+                          -platform=linux_amd64 -platform=darwin_arm64.
   unused_variable         A variable nobody reads usually means a rename the
                           callers never followed, so their input has silently
                           stopped taking effect.
@@ -253,9 +310,11 @@ FIXES
   span-exact, unambiguous, and idempotent; a rule that would have to guess
   attaches nothing and leaves the edit to you.
 
-  Fixes exist for terraform::fmt, stricttf::interpolation_only, and
-  stricttf::quoted_type_constraint when the quoted type is "string",
-  "number", or "bool".
+  Fixes exist for terraform::fmt, stricttf::interpolation_only,
+  stricttf::comment_syntax, stricttf::deprecated_index (a .* splat only
+  when no index follows it, since attribute-only and full splats differ
+  there), and stricttf::quoted_type_constraint when the quoted type is
+  "string", "number", or "bool".
 
   stricttf fix applies fixes back to front within each file, deduplicates
   identical edits, keeps the first of any overlapping alternatives, refuses

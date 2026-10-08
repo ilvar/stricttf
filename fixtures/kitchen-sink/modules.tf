@@ -5,6 +5,8 @@ module "vpc" {
 module "dns" {
   source  = "terraform-aws-modules/route53/aws"
   version = "~> 3.0"
+
+  depends_on = [random_id.suffix]
 }
 
 module "network_policy" {
