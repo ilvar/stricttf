@@ -206,3 +206,30 @@ fn a_symlinked_configuration_file_is_read_like_terraform_reads_it() {
         "the linked required_version must count: {report:#?}"
     );
 }
+
+#[test]
+fn a_trivy_finding_supersedes_only_the_duplicate_it_covers() {
+    let ours = |line: u64| diagnostic("main.tf", line, 3, "stricttf::public_database", "ours");
+    let mut theirs = diagnostic("main.tf", 40, 1, "trivy::AWS-0180", "theirs");
+    theirs.at.end_line = 45;
+    let elsewhere = diagnostic("other.tf", 42, 1, "stricttf::public_database", "ours");
+    let unrelated = diagnostic("main.tf", 42, 1, "stricttf::hardcoded_secret", "ours");
+
+    let kept = stricttf::supersede_with_trivy(vec![
+        ours(42),
+        ours(50),
+        theirs.clone(),
+        elsewhere.clone(),
+        unrelated.clone(),
+    ]);
+
+    assert_eq!(kept, vec![ours(50), theirs, elsewhere, unrelated]);
+}
+
+#[test]
+fn without_a_trivy_finding_nothing_is_superseded() {
+    let ours = diagnostic("main.tf", 12, 1, "stricttf::open_admin_ingress", "ours");
+    let wrong_check = diagnostic("main.tf", 12, 1, "trivy::AWS-0092", "theirs");
+    let kept = stricttf::supersede_with_trivy(vec![ours.clone(), wrong_check.clone()]);
+    assert_eq!(kept, vec![ours, wrong_check]);
+}

@@ -146,8 +146,14 @@ CHECKING LAYERS
   comments are honoured -- trivy offers no way to disable them -- so treat
   each one as an accepted risk a reviewer must see. trivy is not allowed to
   download remote module sources; remote module calls are evaluated as
-  unknown. Where trivy and a resource-policy
-  rule both catch one defect, both are reported; fixing it clears both.
+  unknown. Three resource-policy rules duplicate a trivy
+  check exactly. When trivy reports its check over the same lines, the
+  stricttf finding is dropped so one defect yields one diagnostic; without
+  trivy, or where trivy misses it, the stricttf rule still reports:
+
+    stricttf::open_admin_ingress   superseded by trivy::AWS-0107
+    stricttf::public_bucket_acl    superseded by trivy::AWS-0092
+    stricttf::public_database      superseded by trivy::AWS-0180
 
   When a .tf file is not HCL, the rules that conclude something is missing
   or unused across the whole module -- required_version_missing,

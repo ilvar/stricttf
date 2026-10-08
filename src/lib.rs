@@ -107,9 +107,48 @@ pub fn run_check_with_depth(module_dir: &Path, depth: Depth) -> Result<Report, S
     if let (true, Some(binary)) = (checkable, binary) {
         diagnostics.extend(tfcli::check(module_dir, binary, &sources)?);
         diagnostics.extend(trivy::check(module_dir, &sources)?);
+        diagnostics = supersede_with_trivy(diagnostics);
     }
 
     Ok(Report::build(diagnostics))
+}
+
+/// Resource-policy rules that trivy's embedded checks duplicate exactly,
+/// paired with the trivy check that supersedes each. Ours exist so the
+/// defect is still caught without trivy; with trivy, one defect must not
+/// produce two diagnostics. `tests/trivy_live.rs` pins every pair against
+/// the pinned trivy, so an upgrade that renames or drops a check fails CI
+/// rather than silently losing coverage.
+pub const TRIVY_SUPERSEDES: &[(&str, &str)] = &[
+    ("stricttf::open_admin_ingress", "trivy::AWS-0107"),
+    ("stricttf::public_bucket_acl", "trivy::AWS-0092"),
+    ("stricttf::public_database", "trivy::AWS-0180"),
+];
+
+/// Drop each superseded `stricttf` finding that its trivy counterpart
+/// reports in the same file over a span containing the finding's line.
+/// A finding trivy missed -- a different location, a narrower check -- is
+/// kept, so the rule never loses coverage by being superseded.
+pub fn supersede_with_trivy(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let covered = |diagnostic: &Diagnostic| {
+        TRIVY_SUPERSEDES
+            .iter()
+            .filter(|(ours, _theirs)| *ours == diagnostic.code)
+            .any(|(_ours, theirs)| {
+                diagnostics.iter().any(|candidate| {
+                    candidate.code == *theirs
+                        && candidate.at.file == diagnostic.at.file
+                        && candidate.at.line <= diagnostic.at.line
+                        && diagnostic.at.line <= candidate.at.end_line
+                })
+            })
+    };
+    let keep: Vec<bool> = diagnostics.iter().map(|d| !covered(d)).collect();
+    diagnostics
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(diagnostic, keep)| keep.then_some(diagnostic))
+        .collect()
 }
 
 /// Run every layer that needs no Terraform binary.

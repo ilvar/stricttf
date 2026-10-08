@@ -96,8 +96,13 @@ not be able to weaken its own check. Inline `#trivy:ignore:<ID>` comments
 are honoured, because trivy cannot disable them, so each is an accepted risk
 visible in review. Trivy is not allowed to download remote module sources. Trivy's absence is a warning rather than a failure
 because it is a third-party scanner with its own opinions; the warning keeps
-the skip visible in every report. Where trivy and a resource-policy rule
-catch the same defect, both are reported, and fixing it clears both.
+the skip visible in every report. Three resource-policy rules duplicate a trivy check exactly:
+`open_admin_ingress` (`trivy::AWS-0107`), `public_bucket_acl`
+(`trivy::AWS-0092`), and `public_database` (`trivy::AWS-0180`). When trivy
+reports its check over the same lines, the `stricttf` finding is dropped, so
+one defect yields one diagnostic; without trivy, or where trivy misses it,
+the `stricttf` rule still reports. `tests/trivy_live.rs` pins every pair
+against the pinned trivy.
 
 When a `.tf` file is not HCL, the rules that conclude something is missing
 or unused across the whole module (`required_version_missing`,

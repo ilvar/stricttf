@@ -44,7 +44,9 @@ pinned trivy over a reproducing module and record whether it fires.
 The scan must stay deterministic and unweakenable: embedded checks only
 (`--skip-check-update`), the module's `.trivyignore` ignored, findings
 outside the module's own files dropped. Trivy's absence is the warning
-`trivy::unavailable`, never a silent skip. Bumping the pinned trivy changes
+`trivy::unavailable`, never a silent skip. A resource-policy rule that duplicates a
+trivy check exactly is listed in `TRIVY_SUPERSEDES` (`src/lib.rs`) so the
+pair yields one diagnostic, and the live suite pins the pair. Bumping the pinned trivy changes
 the reported set; update CI, the generated workflow, help, README, and the
 goldens in one change.
 

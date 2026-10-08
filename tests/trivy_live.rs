@@ -161,9 +161,52 @@ fn a_full_check_reports_trivy_findings_with_code_level_and_location() {
     assert_eq!(tracing.len(), 1, "{report}");
     assert_eq!(at(tracing[0]), ("warning", "main.tf", 52, 1, 66, 2));
 
-    // The other layers still report everything they find.
-    assert!(!diagnostics_with_code(&report, "stricttf::open_admin_ingress").is_empty());
+    // The other layers still report everything they find; the one rule
+    // trivy duplicates here gives way to trivy's own finding.
+    assert!(diagnostics_with_code(&report, "stricttf::open_admin_ingress").is_empty());
     assert!(!diagnostics_with_code(&report, "terraform::init").is_empty());
+}
+
+#[test]
+fn every_superseded_rule_is_replaced_by_its_trivy_check_at_the_same_place() {
+    // Pins TRIVY_SUPERSEDES against the pinned trivy: if an upgrade renames
+    // or narrows a check, this fails instead of the defect going unreported.
+    if !trivy_ready("every_superseded_rule_is_replaced_by_its_trivy_check_at_the_same_place") {
+        return;
+    }
+    let fixture = support::module_fixture("insecure");
+    let scratch = support::empty_directory();
+
+    let source_only = stricttf::run_check_with_depth(fixture.path(), stricttf::Depth::SourceOnly)
+        .expect("source-only check should run");
+    let full = json(&check_offline(&fixture, scratch.path()).stdout);
+
+    for (ours, theirs) in stricttf::TRIVY_SUPERSEDES {
+        let without_trivy: Vec<(String, u64)> = source_only
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == *ours)
+            .map(|diagnostic| (diagnostic.at.file.clone(), diagnostic.at.line))
+            .collect();
+        assert!(
+            !without_trivy.is_empty(),
+            "the fixture must exercise {ours}"
+        );
+        assert!(
+            diagnostics_with_code(&full, ours).is_empty(),
+            "{ours} must give way to {theirs}: {full}"
+        );
+        let replacements = diagnostics_with_code(&full, theirs);
+        for (file, line) in &without_trivy {
+            assert!(
+                replacements.iter().any(|diagnostic| {
+                    let (_level, at_file, start, _col, end, _end_col) = at(diagnostic);
+                    at_file == file.as_str() && start <= *line && *line <= end
+                }),
+                "{theirs} must cover the {ours} finding at {file}:{line}: {full}"
+            );
+        }
+    }
 }
 
 #[test]
