@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "error_count": 1,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Failed to query available provider packages: Could not retrieve the list of available versions for provider hashicorp/null: no available releases match the given constraints >= 99.0.0 To see which modules are currently depending on hashicorp/null and what versions are specified, run the following command: terraform providers",
+      "at": {
+        "file": ".",
+        "line": 1,
+        "col": 1,
+        "end_line": 1,
+        "end_col": 1,
+        "snippet": ""
+      },
+      "fixes": []
+    }
+  ]
+}

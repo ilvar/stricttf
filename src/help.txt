@@ -1,0 +1,326 @@
+stricttf - a deterministic Terraform module oracle for coding agents
+
+WHAT THIS IS
+
+  stricttf is not a new configuration language, a Terraform fork, or a
+  policy engine. It is a strict subset of Terraform plus a closed
+  diagnostic loop: every checking layer reports into one machine-readable
+  JSON document with stable codes, exact locations, and deterministic
+  ordering, so an agent can run check -> patch -> re-check without parsing
+  human prose.
+
+INSTALL
+
+  cargo install --git https://github.com/ilvar/stricttf
+
+  Terraform must be on PATH for the full check; CI verifies against
+  v1.16.5. When no terraform binary is found, an OpenTofu tofu binary is
+  used instead. Modules from stricttf new need Terraform 1.6 or newer,
+  because they ship terraform test files. Installing the binary does not
+  modify your home directory; run install-skills for that.
+
+COMMANDS
+
+  stricttf --help                  print this manual and exit 0
+  stricttf check [path]            check a module directory
+  stricttf fix [path]              apply mechanical fixes, then re-check
+  stricttf new <name>              generate a strict module in ./<name>
+  stricttf install-skills          install the agent skill for detected agents
+  stricttf [path]                  a bare path is treated as check
+
+  -h, --help, help          any of these print this manual, from any position
+  --source-only             run only the layers that need no terraform binary
+
+  A path names one module: the directory whose *.tf files Terraform loads
+  together. Nested module directories are not descended into; check each
+  one separately.
+
+WORKFLOW
+
+  1. Run stricttf --help and treat this manual as the source of truth.
+  2. Make the smallest coherent change to the module.
+  3. Run stricttf check <path> and parse the single JSON document on stdout.
+  4. Fix every diagnostic whose level is "error". Never invent a fix.
+  5. Run stricttf fix <path> only for rules that carry a "fixes" entry.
+  6. Repeat from step 3 until "ok" is true.
+  7. Run terraform test and the module's own gate before submitting.
+  8. Read the final diff. Do not submit known failures.
+
+OUTPUT CONTRACT
+
+  Operational commands write exactly one JSON document to stdout. --help is
+  the only plain-text stdout mode. Human-oriented failures and installation
+  notices go to stderr.
+
+  {
+    "ok": false,
+    "error_count": 1,
+    "warning_count": 0,
+    "diagnostics": [
+      {
+        "level": "error",
+        "source": "stricttf",
+        "code": "stricttf::interpolation_only",
+        "message": "this string is a single interpolation; write the expression directly without \"${ }\"",
+        "at": {
+          "file": "main.tf",
+          "line": 7, "col": 11, "end_line": 7, "end_col": 24,
+          "snippet": "  input = \"${var.name}\""
+        },
+        "fixes": [
+          {
+            "hint": "replace the template with `var.name`",
+            "replace_with": "var.name",
+            "line": 7, "col": 11, "end_line": 7, "end_col": 24
+          }
+        ]
+      }
+    ]
+  }
+
+  level     "error" or "warning". Only errors affect ok and the exit code.
+  source    "stricttf" for a subset rule, "terraform" for a normalised
+            terraform (or tofu) finding.
+  code      a stable identifier. Match on this, never on message text.
+  at        1-based line and column; columns count characters, and end_col
+            points one past the last character. snippet is the full text
+            of the first line the span touches.
+  fixes     present only when a replacement is unambiguous and idempotent;
+            an empty array otherwise.
+
+  Diagnostics are sorted by (file, line, col, code, message) and
+  deduplicated, so two runs over the same module produce identical bytes.
+  File paths are relative to the module directory.
+
+EXIT CODES
+
+  0   no error diagnostics
+  1   error diagnostics remain
+  2   invocation or operational failure (bad arguments, missing terraform,
+      unreadable module, unparsable terraform output, refusal to overwrite
+      a modified skill)
+
+  Exit code 2 always means the check did not complete. Never treat it as
+  a clean module.
+
+CHECKING LAYERS
+
+  Layers run cheapest first, and every layer reports everything it finds
+  rather than stopping at its first defect.
+
+  1. module structure      syntax, version constraints, provider
+                           requirements, and variable files.
+  2. configuration source  variables, outputs, module calls, and
+                           expressions Terraform accepts but this subset
+                           does not.
+  3. resource policy       security defects decidable from literal
+                           resource arguments.
+  4. terraform             terraform fmt, init -backend=false, and
+                           validate, normalised.
+
+  Layer 4 is skipped when layer 1 proves a .tf file is not HCL. Terraform's
+  error for an unparsable file tells you strictly less than the located
+  syntax diagnostic already did.
+
+  --source-only runs layers 1 to 3 only. Without it, a missing terraform
+  binary is an operational failure rather than a silently reduced check.
+
+  When a .tf file is not HCL, the rules that conclude something is missing
+  or unused across the whole module -- required_version_missing,
+  provider_undeclared, tfvars_undeclared, unused_variable, unused_local --
+  stay silent: the declaration they would miss may be in the broken file.
+  Fix the syntax error and re-check.
+
+  Blocks in override files (override.tf, *_override.tf) are partial by
+  design, so they are not required to repeat a type, description, source,
+  version, or sensitive flag the block they override already declares.
+
+  Files read: *.tf and *.tfvars in the module directory, and
+  tests/*.tftest.hcl. JSON configuration (*.tf.json) is checked by layer 4
+  only. Rules that need a value decide only from literals: a value computed
+  from an expression is never guessed at.
+
+  The terraform layer never writes into the module. Its working directory
+  (.terraform) lives in a per-module cache under the system temp
+  directory. An existing .terraform.lock.hcl is used read-only; one that
+  init had to create is removed again afterwards. init still downloads the
+  providers and modules the configuration requires.
+
+STABLE CODES
+
+  Module structure
+
+  stricttf::no_configuration            the directory holds no .tf files
+  stricttf::syntax_error                a .tf, .tfvars, or .tftest.hcl file is not HCL
+  stricttf::required_version_missing    no terraform { required_version }
+  stricttf::provider_undeclared         a provider used but not in required_providers
+  stricttf::provider_source_missing     a required_providers entry with no source
+  stricttf::provider_version_missing    a required_providers entry with no version
+  stricttf::provider_version_unbounded  a provider version with no upper bound
+  stricttf::lock_file_missing           warning; providers but no .terraform.lock.hcl
+  stricttf::tfvars_undeclared           a .tfvars assignment to an undeclared variable
+
+  Configuration source
+
+  stricttf::variable_missing_type       a variable with no type
+  stricttf::variable_missing_description
+  stricttf::variable_any_type           any inside a type constraint
+  stricttf::quoted_type_constraint      a legacy quoted type such as "string"
+  stricttf::sensitive_variable_unmarked a credential-named variable without
+                                        sensitive = true, unless typed bool
+                                        or number
+  stricttf::output_missing_description
+  stricttf::unused_variable             warning; declared but never read
+  stricttf::unused_local                warning; declared but never read
+  stricttf::module_version_missing      a registry module call with no version
+  stricttf::module_version_inexact      a registry module version range
+  stricttf::module_ref_missing          a git module source with no ref, or a
+                                        ref naming a branch
+  stricttf::nondeterministic_function   timestamp, uuid, bcrypt, plantimestamp
+  stricttf::provisioner                 a provisioner block
+  stricttf::external_program            data "external"
+  stricttf::interpolation_only          "${expr}" where expr alone is meant
+  stricttf::ignore_changes_all          warning; lifecycle ignore_changes = all
+  stricttf::name_not_snake_case         a resource, data, module, variable,
+                                        output, or local name
+
+  Resource policy
+
+  stricttf::hardcoded_secret            a literal credential in configuration
+                                        or a .tfvars file
+  stricttf::open_admin_ingress          0.0.0.0/0 or ::/0 reaching SSH, RDP,
+                                        or every port
+  stricttf::public_bucket_acl           a public or authenticated-read S3 ACL
+  stricttf::public_database             publicly_accessible = true
+  stricttf::wildcard_iam_action         an Allow statement granting "*"
+
+  Terraform
+
+  terraform::fmt        the file is not in terraform fmt canonical style
+  terraform::init       terraform init failed; validate was not run
+  terraform::validate   a normalised terraform validate diagnostic
+
+WHY THE STRICT RULES EXIST
+
+  interpolation_only      "${var.name}" is Terraform 0.11 syntax. A template
+                          holding one interpolation yields the inner value
+                          unchanged, so the wrapper only hides intent and
+                          suggests a string where there may be a list or a
+                          number. terraform fmt removes it too. Write
+                          var.name.
+  nondeterministic_function
+                          timestamp() and uuid() return a new value on every
+                          plan, so a resource using one never converges: every
+                          plan shows a change and no diff means anything.
+                          Calls inside check blocks, validation blocks, and
+                          preconditions or postconditions plan no change and
+                          are allowed.
+  provider_version_unbounded
+                          ">= 5.0" accepts the next major release the day it
+                          ships, with its breaking changes. Use "~> 5.0" or
+                          add an upper bound.
+  module_version_inexact  A module version range lets the same commit
+                          deploy different code on different days. Pin one
+                          version and upgrade on purpose.
+  variable_missing_type   An untyped variable accepts anything, so a caller's
+                          mistake surfaces deep inside a resource instead of
+                          at the module boundary. The same holds for any.
+  hardcoded_secret        A literal credential in configuration lands in
+                          version control and in plain text in state. Read
+                          it from a sensitive variable or a secret store.
+  provisioner             Provisioners run outside Terraform's plan, so their
+                          effect is invisible to review and impossible to
+                          diff. Use user_data, cloud-init, or a
+                          configuration-management tool.
+  unused_variable         A variable nobody reads usually means a rename the
+                          callers never followed, so their input has silently
+                          stopped taking effect.
+
+  A credential name is one whose final segment is password, passwd,
+  passphrase, or token, or is secret after at least one other segment
+  (client_secret, not a bare secret, which usually names a secret in a
+  secret store), or whose final two segments are access_key, api_key,
+  private_key, secret_key, or secret_string. password_length and
+  secret_arn describe a secret without containing one, and the idempotency
+  keys creation_token, client_token, and idempotency_token hold none; none
+  of these are credential names.
+
+FIXES
+
+  Terraform supplies no machine-applicable suggestions beyond its own
+  formatter, so every fix is either terraform fmt's own output or a
+  stricttf rule's. A rule may attach a fix only when the replacement is
+  span-exact, unambiguous, and idempotent; a rule that would have to guess
+  attaches nothing and leaves the edit to you.
+
+  Fixes exist for terraform::fmt, stricttf::interpolation_only, and
+  stricttf::quoted_type_constraint when the quoted type is "string",
+  "number", or "bool".
+
+  stricttf fix applies fixes back to front within each file, deduplicates
+  identical edits, keeps the first of any overlapping alternatives, refuses
+  any path outside the module directory, validates byte ranges and UTF-8
+  boundaries before writing, and re-checks after every pass. It stops when
+  the report is clean, when no applicable fix remains, when a pass makes no
+  progress, or after 10 passes.
+
+  Most codes carry no fix. That is deliberate: fixing them requires
+  knowing what the module is for.
+
+GENERATED MODULES
+
+  stricttf new <name> writes a module that already passes stricttf check
+  with no errors and no warnings, along with the workflow that keeps it
+  passing:
+
+    versions.tf                     required_version, bounded
+    variables.tf                    typed, described, validated inputs
+    main.tf                         provider-free, built on terraform_data
+    outputs.tf                      described outputs
+    tests/main.tftest.hcl           terraform test runs, including one
+                                    proving the input validation rejects
+                                    bad input
+    .github/workflows/ci.yml        the same gate, in CI
+    .pre-commit-config.yaml         the same gate, before each commit
+    Makefile, scripts/check.sh      the same gate, locally
+    .tflint.hcl, .terraform-version third-party tool configuration
+    .gitignore, AGENTS.md, CLAUDE.md, README.md
+
+  The scaffold needs no provider and no network, so its gate runs anywhere.
+  Its CI installs the stricttf release that generated it, by tag, so a
+  later release with new rules never turns it red unannounced.
+  Add required_providers, and commit the .terraform.lock.hcl that init
+  writes, when the module grows its first real resource. tflint is wired in
+  but optional; scripts/check.sh names every stage it skipped, so a green
+  run never means nothing was checked.
+
+  Module names must be lowercase ASCII letters, digits, and hyphens,
+  starting with a letter, not ending with a hyphen, at most 64 characters.
+
+AGENT SKILL
+
+  stricttf install-skills installs the bundled skill for agents it detects:
+
+    Codex        ~/.agents/skills/stricttf/SKILL.md
+    Claude Code  ~/.claude/skills/stricttf/SKILL.md
+
+  Codex is detected from a codex executable or ~/.codex or ~/.agents;
+  Claude Code from a claude executable or ~/.claude. Only detected agents
+  are installed for. Every destination is preflighted before any is
+  written, and anything created is rolled back if a later write fails. An
+  identical existing file is accepted, so the command is idempotent; a
+  modified one is refused, so your customisation is never destroyed.
+  Remove it explicitly to reinstall the bundled version.
+
+CONSTRAINTS
+
+  - Match on code, never on message text. Messages may be reworded; codes
+    are the contract.
+  - Never invent a fix, an applicability, or a diagnostic. If a rule
+    carries no fix, edit the module yourself.
+  - Never suppress, skip, or delete a check to reach a clean report.
+  - Never treat exit code 2 as success, and never treat a warning-only
+    report as a failure.
+  - A module that validates is not a module that works. Read the plan, not
+    only the configuration diff.
+  - Do not push a change whose gate you have not run.

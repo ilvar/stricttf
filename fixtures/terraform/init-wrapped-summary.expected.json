@@ -1,0 +1,37 @@
+{
+  "ok": false,
+  "error_count": 2,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Terraform encountered problems during initialisation, including problems with the configuration, described below.: The Terraform configuration must be valid before initialization so that Terraform can determine which modules and providers need to be installed.",
+      "at": {
+        "file": ".",
+        "line": 1,
+        "col": 1,
+        "end_line": 1,
+        "end_col": 1,
+        "snippet": ""
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Invalid quoted type constraints: Terraform 0.11 and earlier required type constraints to be given in quotes, but that form is now deprecated and will be removed in a future version of Terraform. Remove the quotes around \"string\".",
+      "at": {
+        "file": "main.tf",
+        "line": 7,
+        "col": 1,
+        "end_line": 7,
+        "end_col": 25,
+        "snippet": "  type        = \"string\""
+      },
+      "fixes": []
+    }
+  ]
+}

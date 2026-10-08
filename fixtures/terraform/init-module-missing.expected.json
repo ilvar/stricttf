@@ -1,0 +1,37 @@
+{
+  "ok": false,
+  "error_count": 2,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Unreadable module directory: Unable to evaluate directory symlink: lstat modules: no such file or directory",
+      "at": {
+        "file": ".",
+        "line": 1,
+        "col": 1,
+        "end_line": 1,
+        "end_col": 1,
+        "snippet": ""
+      },
+      "fixes": []
+    },
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Unreadable module directory: The directory could not be read for module \"network\" at main.tf:5.",
+      "at": {
+        "file": "main.tf",
+        "line": 5,
+        "col": 1,
+        "end_line": 5,
+        "end_col": 19,
+        "snippet": "module \"network\" {"
+      },
+      "fixes": []
+    }
+  ]
+}

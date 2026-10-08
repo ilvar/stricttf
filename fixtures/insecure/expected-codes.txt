@@ -1,0 +1,5 @@
+stricttf::hardcoded_secret
+stricttf::open_admin_ingress
+stricttf::public_bucket_acl
+stricttf::public_database
+stricttf::wildcard_iam_action

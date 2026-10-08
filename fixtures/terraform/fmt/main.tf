@@ -1,0 +1,13 @@
+terraform {
+  required_version = ">= 1.6.0"
+}
+
+variable "greeting" {
+  type = string
+  description = "Greeting, e.g. “héllo”."
+}
+
+resource "terraform_data" "greeting" {
+  input = "${var.greeting}"
+    triggers_replace = [var.greeting]
+}

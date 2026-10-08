@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "error_count": 1,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::init",
+      "message": "Unsupported Terraform Core version: This configuration does not support Terraform version 1.16.5. To proceed, either choose another supported Terraform version or update this version constraint. Version constraints are normally set for good reason, so updating the constraint may lead to other errors or unexpected behavior.",
+      "at": {
+        "file": "main.tf",
+        "line": 2,
+        "col": 1,
+        "end_line": 2,
+        "end_col": 33,
+        "snippet": "  required_version = \">= 99.0.0\""
+      },
+      "fixes": []
+    }
+  ]
+}

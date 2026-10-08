@@ -1,0 +1,86 @@
+{
+  "format_version": "1.0",
+  "valid": false,
+  "error_count": 2,
+  "warning_count": 1,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "summary": "Quoted references are deprecated",
+      "detail": "In this context, references are expected literally rather than in quotes. Terraform 0.11 and earlier required quotes, but quoted references are now deprecated and will be removed in a future version of Terraform. Remove the quotes surrounding this reference to silence this warning.",
+      "range": {
+        "filename": "main.tf",
+        "start": {
+          "line": 15,
+          "column": 17,
+          "byte": 271
+        },
+        "end": {
+          "line": 15,
+          "column": 41,
+          "byte": 295
+        }
+      },
+      "snippet": {
+        "context": "resource \"terraform_data\" \"after\"",
+        "code": "  depends_on = [\"terraform_data.example\"]",
+        "start_line": 15,
+        "highlight_start_offset": 16,
+        "highlight_end_offset": 40,
+        "values": []
+      }
+    },
+    {
+      "severity": "error",
+      "summary": "Reference to undeclared local value",
+      "detail": "A local value with the name \"nope\" has not been declared.",
+      "range": {
+        "filename": "main.tf",
+        "start": {
+          "line": 11,
+          "column": 35,
+          "byte": 203
+        },
+        "end": {
+          "line": 11,
+          "column": 45,
+          "byte": 213
+        }
+      },
+      "snippet": {
+        "context": "resource \"terraform_data\" \"example\"",
+        "code": "  input = { label = \"café\", ref = local.nope }",
+        "start_line": 11,
+        "highlight_start_offset": 35,
+        "highlight_end_offset": 45,
+        "values": []
+      }
+    },
+    {
+      "severity": "error",
+      "summary": "Reference to undeclared input variable",
+      "detail": "An input variable with the name \"missing\" has not been declared. This variable can be declared with a variable \"missing\" {} block.",
+      "range": {
+        "filename": "outputs.tf",
+        "start": {
+          "line": 3,
+          "column": 17,
+          "byte": 96
+        },
+        "end": {
+          "line": 3,
+          "column": 28,
+          "byte": 107
+        }
+      },
+      "snippet": {
+        "context": "output \"missing\"",
+        "code": "  value       = var.missing",
+        "start_line": 3,
+        "highlight_start_offset": 16,
+        "highlight_end_offset": 27,
+        "values": []
+      }
+    }
+  ]
+}

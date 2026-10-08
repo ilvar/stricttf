@@ -1,0 +1,31 @@
+{
+  "ok": false,
+  "error_count": 1,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::fmt",
+      "message": "main.tf is not in terraform fmt layout; apply the fix or run terraform fmt",
+      "at": {
+        "file": "main.tf",
+        "line": 6,
+        "col": 8,
+        "end_line": 12,
+        "end_col": 3,
+        "snippet": "  type = string"
+      },
+      "fixes": [
+        {
+          "hint": "rewrite this region the way terraform fmt lays it out",
+          "replace_with": "       = string\n  description = \"Greeting, e.g. “héllo”.\"\n}\n\nresource \"terraform_data\" \"greeting\" {\n  input            = var.greeting\n",
+          "line": 6,
+          "col": 8,
+          "end_line": 12,
+          "end_col": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+name: module
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: __MODULE__-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a release on either side cannot break this workflow
+  # unannounced. Keep TERRAFORM_VERSION in step with .terraform-version.
+  TERRAFORM_VERSION: 1.16.5
+  TFLINT_VERSION: v0.64.0
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  gate:
+    name: strict gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # The wrapper rewrites stdout; stricttf's report must reach the
+          # file below byte for byte.
+          terraform_wrapper: false
+
+      - name: Install TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Pinned to the stricttf release that generated this module. Bump the
+      # tag deliberately, like TERRAFORM_VERSION, when adopting new rules.
+      - name: Install stricttf
+        run: cargo install --git https://github.com/ilvar/stricttf --tag v__STRICTTF_VERSION__ --locked
+
+      - name: stricttf check
+        shell: bash
+        run: |
+          set -euo pipefail
+          stricttf check . > stricttf-report.json || status=$?
+          cat stricttf-report.json
+          exit "${status:-0}"
+
+      - name: Upload stricttf report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stricttf-report
+          path: stricttf-report.json
+
+      - name: Full gate
+        env:
+          # tflint --init downloads the pinned ruleset from GitHub; an
+          # authenticated request avoids the anonymous rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/check.sh

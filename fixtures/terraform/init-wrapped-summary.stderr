@@ -1,0 +1,16 @@
+
+Error: Terraform encountered problems during initialisation, including problems
+with the configuration, described below.
+
+The Terraform configuration must be valid before initialization so that
+Terraform can determine which modules and providers need to be installed.
+
+
+Error: Invalid quoted type constraints
+
+  on main.tf line 7, in variable "a":
+   7:   type        = "string"
+
+Terraform 0.11 and earlier required type constraints to be given in quotes,
+but that form is now deprecated and will be removed in a future version of
+Terraform. Remove the quotes around "string".

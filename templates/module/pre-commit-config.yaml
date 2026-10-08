@@ -1,0 +1,28 @@
+# Mirrors the CI gate. Install once with `pre-commit install`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.2
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+
+  - repo: local
+    hooks:
+      - id: stricttf
+        name: stricttf check
+        entry: stricttf check .
+        language: system
+        pass_filenames: false
+        files: (\.tf|\.tfvars|\.tftest\.hcl)$

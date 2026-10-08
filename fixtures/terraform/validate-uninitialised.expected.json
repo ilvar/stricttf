@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "error_count": 1,
+  "warning_count": 0,
+  "diagnostics": [
+    {
+      "level": "error",
+      "source": "terraform",
+      "code": "terraform::validate",
+      "message": "Missing required provider: This configuration requires provider registry.terraform.io/hashicorp/null, but that provider isn't available. You may be able to install it automatically by running: terraform init",
+      "at": {
+        "file": ".",
+        "line": 1,
+        "col": 1,
+        "end_line": 1,
+        "end_col": 1,
+        "snippet": ""
+      },
+      "fixes": []
+    }
+  ]
+}

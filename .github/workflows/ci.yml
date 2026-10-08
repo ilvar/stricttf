@@ -1,0 +1,235 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a Terraform release can never change the normalised output
+  # the golden tests and live tests assert against unannounced.
+  TERRAFORM_VERSION: 1.16.5
+
+jobs:
+  test:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo data
+        uses: Swatinem/rust-cache@v2
+
+      # The wrapper rewrites stdout and exit codes for workflow outputs,
+      # which would corrupt the JSON stricttf parses from terraform.
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      # STRICTTF_REQUIRE_TERRAFORM turns a skipped live test into a
+      # failure, so the end-to-end layer can never silently stop being
+      # tested.
+      - name: Run tests
+        env:
+          STRICTTF_REQUIRE_TERRAFORM: "1"
+          PROPTEST_CASES: 512
+        run: cargo test --all-targets --all-features --locked
+
+      - name: Verify a package-less git install
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/git-install"
+          cargo install --git "file://$GITHUB_WORKSPACE" --root "$install_root" --locked
+          test -x "$install_root/bin/stricttf"
+          "$install_root/bin/stricttf" --help > /dev/null
+
+      - name: Verify agent skill installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/git-install/bin/stricttf"
+          agent_home="$RUNNER_TEMP/agent-home"
+          mkdir -p "$agent_home/.codex" "$agent_home/.claude"
+
+          HOME="$agent_home" "$binary" install-skills > "$RUNNER_TEMP/skills.json"
+          grep -q '"ok": true' "$RUNNER_TEMP/skills.json"
+          cmp skills/stricttf/SKILL.md "$agent_home/.agents/skills/stricttf/SKILL.md"
+          cmp skills/stricttf/SKILL.md "$agent_home/.claude/skills/stricttf/SKILL.md"
+
+          # Idempotent on a second run.
+          HOME="$agent_home" "$binary" install-skills > "$RUNNER_TEMP/skills-again.json"
+          grep -q '"ok": true' "$RUNNER_TEMP/skills-again.json"
+
+  strictrs:
+    name: strictrs subset
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo data
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install strictrs
+        run: cargo install --git https://github.com/ilvar/strictrs --locked
+
+      # stricttf is itself written in the strictrs strict subset. Its own
+      # gate is the same kind of gate it imposes on the modules it checks.
+      - name: strictrs check
+        shell: bash
+        run: |
+          set -euo pipefail
+          strictrs check . > strictrs-report.json || status=$?
+          cat strictrs-report.json
+          exit "${status:-0}"
+
+      - name: Upload strictrs report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strictrs-report
+          path: strictrs-report.json
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo data
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Measure coverage
+        env:
+          STRICTTF_REQUIRE_TERRAFORM: "1"
+        run: |
+          cargo llvm-cov --all-features --locked \
+            --lcov --output-path lcov.info
+          cargo llvm-cov report --summary-only | tee coverage.txt
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            coverage.txt
+
+      # A coverage number nobody enforces is a number nobody reads.
+      - name: Enforce the line-coverage floor
+        run: cargo llvm-cov report --fail-under-lines 94
+
+  module:
+    name: generated module
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Cache Cargo data
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install stricttf
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/stricttf-install"
+          cargo install --path . --root "$install_root" --locked
+          echo "$install_root/bin" >> "$GITHUB_PATH"
+
+      - name: Generate a module
+        shell: bash
+        run: |
+          set -euo pipefail
+          module_root="$(mktemp -d)"
+          cd "$module_root"
+          stricttf new demo-module > report.json
+          grep -q '"ok": true' report.json
+          echo "GENERATED_MODULE=$module_root/demo-module" >> "$GITHUB_ENV"
+
+      # Runs before the gate, which legitimately creates .terraform.
+      - name: Assert a full check leaves the module untouched
+        working-directory: ${{ env.GENERATED_MODULE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q .
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.invalid commit -qm generated
+          stricttf check . > "$RUNNER_TEMP/report.json"
+          grep -q '"ok": true' "$RUNNER_TEMP/report.json"
+          git status --porcelain --ignored
+          test -z "$(git status --porcelain --ignored)"
+
+      # The generated module's own gate, run exactly as a contributor would.
+      - name: Run the generated module's gate
+        working-directory: ${{ env.GENERATED_MODULE }}
+        run: ./scripts/check.sh
+
+      - name: Upload the generated module
+        if: always() && env.GENERATED_MODULE != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-module
+          path: ${{ env.GENERATED_MODULE }}

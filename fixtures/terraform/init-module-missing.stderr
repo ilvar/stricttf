@@ -1,0 +1,9 @@
+
+Error: Unreadable module directory
+
+Unable to evaluate directory symlink: lstat modules: no such file or
+directory
+
+Error: Unreadable module directory
+
+The directory  could not be read for module "network" at main.tf:5.

@@ -1,0 +1,18 @@
+[package]
+name = "stricttf"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97.1"
+description = "A deterministic Terraform module diagnostic oracle for LLM code generation"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+hcl-edit = "0.9"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
