@@ -65,6 +65,8 @@ fn the_manual_documents_every_command_and_flag() {
 #[test]
 fn the_manual_documents_every_required_section() {
     for section in [
+        "STRICTTF_VERSION",
+        "install.sh",
         "INSTALL",
         "COMMANDS",
         "WORKFLOW",

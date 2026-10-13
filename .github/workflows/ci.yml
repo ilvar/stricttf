@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -259,3 +260,101 @@ jobs:
         with:
           name: generated-module
           path: ${{ env.GENERATED_MODULE }}
+
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/test_installer.py
+      - run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - run: shellcheck --norc --shell=bash --enable=all install.sh
+  build:
+    needs: [test, strictrs, coverage, module, installer]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build toolchain
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install --yes musl-tools
+          fi
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add --toolchain 1.97.1 "$TARGET"
+      - name: Build and smoke test native binary
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            CC=musl-gcc CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc cargo build --release --locked --target "$TARGET"
+          else
+            cargo build --release --locked --target "$TARGET"
+          fi
+          "target/$TARGET/release/stricttf" --help >/dev/null
+          if [ "$RUNNER_OS" = Linux ]; then
+            readelf -l "target/$TARGET/release/stricttf" >"$RUNNER_TEMP/program-headers.txt"
+            if grep -q INTERP "$RUNNER_TEMP/program-headers.txt"; then
+              echo 'expected a static binary without a dynamic interpreter' >&2
+              exit 1
+            fi
+          fi
+      - name: Package with checksum
+        run: |
+          mkdir -p dist
+          cp "target/$TARGET/release/stricttf" "dist/stricttf-$TARGET"
+          cd dist
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 "stricttf-$TARGET" >"stricttf-$TARGET.sha256"
+          else
+            sha256sum "stricttf-$TARGET" >"stricttf-$TARGET.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stricttf-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+  release:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stricttf-*
+          path: dist
+          merge-multiple: true
+      - name: Publish new manifest version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving its binaries unchanged. Bump Cargo.toml for a new release."
+            exit 0
+          fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            tag_commit=$(git rev-parse "$tag^{commit}")
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "Unreleased tag $tag points to a different commit; bump the version instead of replacing it." >&2
+              exit 1
+            fi
+          fi
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "stricttf $version" --generate-notes --latest

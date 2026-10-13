@@ -10,6 +10,14 @@ WHAT THIS IS
   human prose.
 
 INSTALL
+  Latest checksummed Linux/macOS x64/ARM64 installer: download install.sh from
+  https://raw.githubusercontent.com/ilvar/stricttf/main/install.sh and run bash install.sh.
+  STRICTTF_VERSION=0.2.2 (or v0.2.2) pins downloads and source builds;
+  unset, empty, or latest selects the latest release. STRICTTF_INSTALL_DIR
+  changes ~/.local/bin; STRICTTF_BUILD_FROM_SOURCE=1 forces a build.
+  Unsupported architectures build the selected tag. Source builds require rustup and a native C compiler; the installer installs Rust 1.97.1 via rustup.
+  Runtime dependencies: Terraform 1.16.5 and Trivy for security scanning. No download/checksum failure is ignored.
+
 
   cargo install --git https://github.com/ilvar/stricttf
 

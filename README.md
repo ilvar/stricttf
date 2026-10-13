@@ -22,6 +22,26 @@ happily and a review or an incident only reveals later.
 
 ## Install
 
+Install the latest release into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ilvar/stricttf/main/install.sh -o /tmp/stricttf-install.sh
+bash /tmp/stricttf-install.sh
+```
+
+The installer downloads a checksummed Linux or macOS binary for x64 or ARM64.
+`STRICTTF_VERSION=0.2.2` (or `v0.2.2`) pins a release; unset, empty, or `latest`
+selects the latest release. `STRICTTF_INSTALL_DIR=/your/bin` changes the destination.
+`STRICTTF_BUILD_FROM_SOURCE=1` forces a source build. Other architectures build
+from the same selected tag. Source builds require rustup and a native C compiler; the installer installs Rust 1.97.1 via rustup.
+Runtime dependencies: Terraform 1.16.5 and Trivy for security scanning. Download or checksum failures stop installation
+without replacing an existing binary. Binary installation needs a published
+release; pinned source builds only need a Git tag.
+
+CI publishes Linux/macOS x64/ARM64 binaries and checksums after the existing
+validation gates pass. Bump `Cargo.toml` and `Cargo.lock` together to publish a new release. Existing releases are never overwritten.
+Installer regression tests run with `python3 tests/test_installer.py`.
+
 ```bash
 cargo install --git https://github.com/ilvar/stricttf
 ```
